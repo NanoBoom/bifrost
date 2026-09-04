@@ -143,6 +143,7 @@
                   "providers/supported-providers/elevenlabs",
                   "providers/supported-providers/fireworks",
                   "providers/supported-providers/gemini",
+                  "providers/supported-providers/github-copilot",
                   "providers/supported-providers/groq",
                   "providers/supported-providers/huggingface",
                   "providers/supported-providers/mistral",
@@ -245,6 +246,8 @@
               },
               "features/telemetry",
               "features/otel",
+              "features/observability/content-logging",
+              "features/observability/latency-breakdown",
               "features/semantic-caching",
               "features/skills-repository",
               {
@@ -546,8 +549,7 @@
               "features/observability/kafka",
               "features/observability/bigquery",
               "features/observability/pubsub",
-              "features/observability/splunk",
-              "features/observability/content-logging"
+              "features/observability/splunk"
             ]
           },
           {
@@ -1507,7 +1509,8 @@
                 "pages": [
                   "GET /api/routing/complexity-analyzer-config",
                   "PUT /api/routing/complexity-analyzer-config",
-                  "POST /api/routing/complexity-analyzer-config/reset"
+                  "POST /api/routing/complexity-analyzer-config/reset",
+                  "GET /api/routing/complexity-analyzer-status"
                 ]
               }
             ]

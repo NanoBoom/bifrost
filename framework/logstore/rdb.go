@@ -196,7 +196,7 @@ const (
 // total spend. idCol is an internal constant.
 func isBucketedDimension(idCol string) bool {
 	switch idCol {
-	case "team_id", "business_unit_id", "customer_id", "user_id", "virtual_key_id":
+	case "team_id", "business_unit_id", "customer_id", "user_id", "virtual_key_id", "project_id":
 		return true
 	}
 	return false
@@ -299,6 +299,12 @@ func (s *RDBLogStore) applyFilters(baseQuery *gorm.DB, filters SearchFilters) *g
 	if len(filters.StopReasons) > 0 {
 		baseQuery = baseQuery.Where("stop_reason IN ?", filters.StopReasons)
 	}
+	if len(filters.ComplexityTiers) > 0 {
+		baseQuery = baseQuery.Where("complexity_tier IN ?", filters.ComplexityTiers)
+	}
+	if len(filters.ComplexityMechanisms) > 0 {
+		baseQuery = baseQuery.Where("complexity_mechanism IN ?", filters.ComplexityMechanisms)
+	}
 	if len(filters.Objects) > 0 {
 		baseQuery = baseQuery.Where("object_type IN ?", filters.Objects)
 	}
@@ -339,6 +345,11 @@ func (s *RDBLogStore) applyFilters(baseQuery *gorm.DB, filters SearchFilters) *g
 	}
 	if len(filters.UserIDs) > 0 {
 		baseQuery = baseQuery.Where("user_id IN ?", filters.UserIDs)
+	}
+	// Scalar, unlike the team, customer and business-unit dimensions: a request is scoped to at most
+	// one project, so there is no array column to OR against.
+	if len(filters.ProjectIDs) > 0 {
+		baseQuery = baseQuery.Where("project_id IN ?", filters.ProjectIDs)
 	}
 	if len(filters.BusinessUnitIDs) > 0 {
 		if s.db.Dialector.Name() == "postgres" {
@@ -1251,14 +1262,16 @@ func normalizeAggregateTimestamp(value any) string {
 func (s *RDBLogStore) listSelectColumns() string {
 	baseCols := strings.Join([]string{
 		"id", "parent_request_id", "timestamp", "object_type", "provider", "model", "alias",
-		"canonical_model_name", "alias_model_family", "server_side_fallback_model",
+		"canonical_model_name", "alias_model_family", "server_side_fallback_model", "served_model",
 		"number_of_retries", "fallback_index",
 		"selected_key_id", "selected_key_name",
 		"virtual_key_id", "virtual_key_name",
 		"routing_engines_used", "routing_rule_id", "routing_rule_name",
+		"complexity_tier", "complexity_mechanism",
 		"user_id", "user_name", "team_id", "team_name", "customer_id", "customer_name",
 		"business_unit_id", "business_unit_name",
 		"team_ids", "team_names", "customer_ids", "customer_names", "business_unit_ids", "business_unit_names",
+		"project_id", "project_name",
 		"user_agent", "app",
 		"speech_input", "transcription_input", "image_generation_input", "video_generation_input",
 		// error_details is intentionally excluded from the list select: for status=error
@@ -1362,9 +1375,9 @@ var billingPayloadColumns = map[string][]string{
 var billingScalarColumns = []string{
 	// Identity and the object-storage key.
 	"id", "timestamp", "object_type",
-	// Pricing lookup: provider, the wire/alias/canonical model triplet, and the
+	// Pricing lookup: provider, the wire/alias/canonical model triplet, the
 	// server-side fallback model that resolvePricing ranks first.
-	"provider", "model", "alias", "canonical_model_name", "server_side_fallback_model",
+	"provider", "model", "alias", "canonical_model_name", "server_side_fallback_model", "served_model",
 	// Override scopes.
 	"selected_key_id", "virtual_key_id", "user_id",
 	// Usage, and the denormalized fallback used when token_usage was offloaded.
@@ -4114,6 +4127,8 @@ var allowedKeyPairColumns = map[string]struct{}{
 	"user_name":          {},
 	"business_unit_id":   {},
 	"business_unit_name": {},
+	"project_id":         {},
+	"project_name":       {},
 }
 
 // GetDistinctKeyPairs returns unique non-empty ID-Name pairs for the given columns using SELECT DISTINCT.

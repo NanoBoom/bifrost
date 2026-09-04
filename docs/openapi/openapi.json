@@ -42571,7 +42571,7 @@
       "post": {
         "operationId": "addMCPClient",
         "summary": "Add MCP client",
-        "description": "Adds a new MCP client with the specified configuration.\nNote: tool_pricing is not available when creating a new client; tool\npricing can only be set once the tool list is known. For shared-connection\nclients tools are fetched after client creation; for per-user auth types\nthey are discovered during the create/verify flow itself.\n",
+        "description": "Adds a new MCP client with the specified configuration.\nNote: tool_pricing is not available when creating a new client; tool\npricing can only be set once the tool list is known. For shared-connection\nclients tools are fetched after client creation; for per-user auth types\nthey are discovered during the create/verify flow itself.\n\nTwo cases require a genuinely authenticated admin session and are refused\nwith 403 when dashboard authentication is disabled or unconfigured, even\nthough other management endpoints stay reachable in that state:\nconnection_type \"stdio\" (which runs the supplied command as a gateway\nsubprocess), and connection_type \"http\"/\"sse\" whose connection_string\nresolves to a loopback, private-network, link-local, or CGNAT address.\nPublic http/sse targets are unaffected.\n",
         "tags": ["MCP"],
         "requestBody": {
           "required": true,
@@ -43407,6 +43407,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "The request was not genuinely authenticated (dashboard authentication is disabled or unconfigured) and connection_type is \"stdio\", or is \"http\"/\"sse\" with a connection_string resolving to a loopback, private-network, link-local, or CGNAT address."
           },
           "500": {
             "description": "Internal server error",
@@ -65114,7 +65117,7 @@
       "get": {
         "operationId": "getComplexityAnalyzerConfig",
         "summary": "Get complexity analyzer config",
-        "description": "Returns the full complexity analyzer runtime config, including tier thresholds and editable keyword lists. Returns built-in defaults if none have been configured.",
+        "description": "Returns the full complexity analyzer runtime config, including the semantic embedding configuration, the llm fallback classifier configuration, and per-tier reference phrase lists. Returns built-in defaults if none have been configured.",
         "tags": ["Routing"],
         "security": [
           {
@@ -65130,29 +65133,64 @@
                   "type": "object",
                   "description": "Full runtime configuration for complexity routing analysis.",
                   "additionalProperties": false,
-                  "required": ["tier_boundaries", "keywords"],
+                  "required": ["keywords"],
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "session": {
+                            "properties": {
+                              "enabled": {
+                                "const": true
+                              }
+                            },
+                            "required": ["enabled"]
+                          }
+                        },
+                        "required": ["session"]
+                      },
+                      "then": {
+                        "required": ["semantic"]
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "semantic": {
+                            "properties": {
+                              "fallback": {
+                                "const": "llm"
+                              }
+                            },
+                            "required": ["fallback"]
+                          }
+                        },
+                        "required": ["semantic"]
+                      },
+                      "then": {
+                        "required": ["llm"]
+                      }
+                    }
+                  ],
                   "properties": {
                     "tier_boundaries": {
                       "type": "object",
-                      "description": "Score thresholds for complexity tier classification. All values must satisfy 0 < simple_medium < medium_complex < complex_reasoning < 1.",
+                      "deprecated": true,
+                      "description": "Deprecated score thresholds for the retired lexical complexity classifier.\nThis block is optional and ignored by semantic classification, but remains\naccepted for backward compatibility. When supplied, values must satisfy\n0 < simple_medium < medium_complex < 1.\n",
                       "additionalProperties": false,
-                      "required": ["simple_medium", "medium_complex", "complex_reasoning"],
+                      "required": ["simple_medium", "medium_complex"],
                       "properties": {
                         "simple_medium": {
                           "type": "number",
-                          "description": "Score boundary between SIMPLE and MEDIUM tiers",
+                          "deprecated": true,
+                          "description": "Deprecated score boundary between SIMPLE and MEDIUM tiers (ignored by semantic classification)",
                           "exclusiveMinimum": 0,
                           "exclusiveMaximum": 1
                         },
                         "medium_complex": {
                           "type": "number",
-                          "description": "Score boundary between MEDIUM and COMPLEX tiers",
-                          "exclusiveMinimum": 0,
-                          "exclusiveMaximum": 1
-                        },
-                        "complex_reasoning": {
-                          "type": "number",
-                          "description": "Score boundary between COMPLEX and REASONING tiers",
+                          "deprecated": true,
+                          "description": "Deprecated score boundary between MEDIUM and COMPLEX tiers (ignored by semantic classification)",
                           "exclusiveMinimum": 0,
                           "exclusiveMaximum": 1
                         }
@@ -65160,42 +65198,151 @@
                     },
                     "keywords": {
                       "type": "object",
-                      "description": "Editable keyword lists used by the complexity analyzer. Only the four user-facing\ndimensions are exposed; `reasoning_keywords` entries drive the reasoning tier\noverride. Matching is normalized to lowercase and duplicates are removed on save.\n",
+                      "description": "Reference phrases for semantic complexity classification, one list per tier.\nEach request is embedded and takes the tier of its nearest phrase. Entries\nshould be whole example prompts rather than individual keywords. Each phrase\nis limited to 2000 characters, the normalized lists may contain at most 750\nphrases combined, and the same phrase cannot appear in two tiers. The field\nnames predate semantic classification and are kept for backward compatibility.\n",
                       "additionalProperties": false,
-                      "required": [
-                        "code_keywords",
-                        "reasoning_keywords",
-                        "technical_keywords",
-                        "simple_keywords"
-                      ],
+                      "required": ["simple_keywords", "medium_keywords", "complex_keywords"],
                       "properties": {
-                        "code_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
-                        "reasoning_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
-                        "technical_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
                         "simple_keywords": {
                           "type": "array",
+                          "description": "Reference phrases for the SIMPLE tier (50 built-in defaults)",
                           "items": {
-                            "type": "string"
+                            "type": "string",
+                            "maxLength": 2000
                           },
                           "minItems": 1
+                        },
+                        "medium_keywords": {
+                          "type": "array",
+                          "description": "Reference phrases for the MEDIUM tier (50 built-in defaults)",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          "minItems": 1
+                        },
+                        "complex_keywords": {
+                          "type": "array",
+                          "description": "Reference phrases for the COMPLEX tier (50 built-in defaults)",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    "semantic": {
+                      "type": "object",
+                      "description": "Embedding configuration for semantic complexity classification. When absent,\nno complexity tier is published and rules referencing complexity_tier fall\nthrough. The provider must have an enabled key.\n",
+                      "additionalProperties": false,
+                      "required": ["provider", "embedding_model"],
+                      "properties": {
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Provider used for embedding calls (must have an enabled key)"
+                        },
+                        "embedding_model": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Embedding model, e.g. text-embedding-3-small"
+                        },
+                        "timeout": {
+                          "description": "Ceiling on the inline embedding call. Accepts a duration string (\"1.5s\") or milliseconds as a number. Default 1.5s; exceeding it publishes no tier for that request.",
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                            },
+                            {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            }
+                          ]
+                        },
+                        "min_similarity": {
+                          "type": "number",
+                          "minimum": 0,
+                          "exclusiveMaximum": 1,
+                          "description": "Similarity floor for the nearest reference phrase; below it no tier is published. 0 (default) accepts the nearest eligible match. Compared against the vector store backend's own similarity scale (raw cosine for chromem/Qdrant/Pinecone/Redis, certainty for Weaviate)."
+                        },
+                        "message_history_count": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 10,
+                          "description": "Number of recent user messages joined oldest-first into the embedded text. 1 (default) embeds only the latest message. System prompts and assistant replies are never embedded."
+                        },
+                        "count_toward_budgets": {
+                          "type": "boolean",
+                          "description": "Whether embedding usage counts toward virtual-key budgets (default false)"
+                        },
+                        "vector_store": {
+                          "type": "string",
+                          "enum": ["embedded", "vector_store"],
+                          "description": "Where reference-phrase embeddings live. `embedded` (default) uses the\nbuilt-in in-memory store, so phrases are re-embedded on every restart.\n`vector_store` uses the top-level `vector_store` when one is configured\nand falls back to the embedded store otherwise.\n"
+                        },
+                        "fallback": {
+                          "type": "string",
+                          "enum": ["none", "llm"],
+                          "description": "What answers when semantic classification produces no tier (a match\nbelow `min_similarity`, a timeout, or an unfinished warmup). `none`\n(the default) records the request as skipped. `llm` asks the chat\nmodel configured in the analyzer's `llm` block, which is required\nwhen this is set.\n"
+                        }
+                      }
+                    },
+                    "llm": {
+                      "type": "object",
+                      "description": "Chat-completion (LLM) fallback classifier settings. The block is inert\nunless `semantic.fallback` selects `llm`; the classifier runs only after\nsemantic classification produces no tier. Tier names (SIMPLE, MEDIUM,\nCOMPLEX) and the response format are fixed: the gateway always appends a\nnon-editable reinforcement stating them.\n",
+                      "additionalProperties": false,
+                      "required": ["provider", "model"],
+                      "properties": {
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Provider used to run the classification chat completion (must have an enabled key)"
+                        },
+                        "model": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Chat model asked to name the tier. Every fallback classification waits on one completion from this model, so pick a small, fast one."
+                        },
+                        "timeout": {
+                          "description": "Per-request classification timeout. Accepts a duration string (\"2s\") or milliseconds as a number. Default 4s. On timeout no complexity tier is published and the request is recorded as skipped.",
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                            },
+                            {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            }
+                          ]
+                        },
+                        "prompt": {
+                          "type": "string",
+                          "maxLength": 4000,
+                          "description": "Replaces the shipped classification guidance (max 4000 characters); empty means the shipped guidance is used. The tier-name and response-format reinforcement is appended by the gateway either way and cannot be edited."
+                        },
+                        "message_history_count": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 10,
+                          "description": "How many of the most recent user messages are given to the classifier, oldest first (default 1, the latest message only). Only user turns count; system prompts and assistant replies are never sent."
+                        },
+                        "count_toward_budgets": {
+                          "type": "boolean",
+                          "description": "Whether classification completion cost counts toward virtual-key budgets (record-only, never enforced; default false)"
+                        }
+                      }
+                    },
+                    "session": {
+                      "type": "object",
+                      "description": "Session-aware complexity routing. When enabled and a request carries a supported session identity, Bifrost retains the highest tier observed across normally sequential turns for 24 hours of inactivity. Overlapping requests for the same session are best-effort and resolve by last writer wins.",
+                      "additionalProperties": false,
+                      "required": ["enabled"],
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean",
+                          "description": "Enable monotonic session tier retention. Requires semantic complexity classification; default is false."
                         }
                       }
                     }
@@ -65229,7 +65376,7 @@
       "put": {
         "operationId": "updateComplexityAnalyzerConfig",
         "summary": "Update complexity analyzer config",
-        "description": "Replaces the full complexity analyzer runtime config and hot-reloads the routing plugin. Tier thresholds must satisfy 0 < simple_medium < medium_complex < complex_reasoning < 1.",
+        "description": "Replaces the full complexity analyzer runtime config and hot-reloads the routing plugin. Changing the embedding configuration or reference phrases triggers a background re-warm of the classifier; unchanged phrases are not re-embedded. Setting semantic.fallback to llm requires the llm block to be present.",
         "tags": ["Routing"],
         "requestBody": {
           "required": true,
@@ -65239,29 +65386,64 @@
                 "type": "object",
                 "description": "Full runtime configuration for complexity routing analysis.",
                 "additionalProperties": false,
-                "required": ["tier_boundaries", "keywords"],
+                "required": ["keywords"],
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "session": {
+                          "properties": {
+                            "enabled": {
+                              "const": true
+                            }
+                          },
+                          "required": ["enabled"]
+                        }
+                      },
+                      "required": ["session"]
+                    },
+                    "then": {
+                      "required": ["semantic"]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "semantic": {
+                          "properties": {
+                            "fallback": {
+                              "const": "llm"
+                            }
+                          },
+                          "required": ["fallback"]
+                        }
+                      },
+                      "required": ["semantic"]
+                    },
+                    "then": {
+                      "required": ["llm"]
+                    }
+                  }
+                ],
                 "properties": {
                   "tier_boundaries": {
                     "type": "object",
-                    "description": "Score thresholds for complexity tier classification. All values must satisfy 0 < simple_medium < medium_complex < complex_reasoning < 1.",
+                    "deprecated": true,
+                    "description": "Deprecated score thresholds for the retired lexical complexity classifier.\nThis block is optional and ignored by semantic classification, but remains\naccepted for backward compatibility. When supplied, values must satisfy\n0 < simple_medium < medium_complex < 1.\n",
                     "additionalProperties": false,
-                    "required": ["simple_medium", "medium_complex", "complex_reasoning"],
+                    "required": ["simple_medium", "medium_complex"],
                     "properties": {
                       "simple_medium": {
                         "type": "number",
-                        "description": "Score boundary between SIMPLE and MEDIUM tiers",
+                        "deprecated": true,
+                        "description": "Deprecated score boundary between SIMPLE and MEDIUM tiers (ignored by semantic classification)",
                         "exclusiveMinimum": 0,
                         "exclusiveMaximum": 1
                       },
                       "medium_complex": {
                         "type": "number",
-                        "description": "Score boundary between MEDIUM and COMPLEX tiers",
-                        "exclusiveMinimum": 0,
-                        "exclusiveMaximum": 1
-                      },
-                      "complex_reasoning": {
-                        "type": "number",
-                        "description": "Score boundary between COMPLEX and REASONING tiers",
+                        "deprecated": true,
+                        "description": "Deprecated score boundary between MEDIUM and COMPLEX tiers (ignored by semantic classification)",
                         "exclusiveMinimum": 0,
                         "exclusiveMaximum": 1
                       }
@@ -65269,42 +65451,151 @@
                   },
                   "keywords": {
                     "type": "object",
-                    "description": "Editable keyword lists used by the complexity analyzer. Only the four user-facing\ndimensions are exposed; `reasoning_keywords` entries drive the reasoning tier\noverride. Matching is normalized to lowercase and duplicates are removed on save.\n",
+                    "description": "Reference phrases for semantic complexity classification, one list per tier.\nEach request is embedded and takes the tier of its nearest phrase. Entries\nshould be whole example prompts rather than individual keywords. Each phrase\nis limited to 2000 characters, the normalized lists may contain at most 750\nphrases combined, and the same phrase cannot appear in two tiers. The field\nnames predate semantic classification and are kept for backward compatibility.\n",
                     "additionalProperties": false,
-                    "required": [
-                      "code_keywords",
-                      "reasoning_keywords",
-                      "technical_keywords",
-                      "simple_keywords"
-                    ],
+                    "required": ["simple_keywords", "medium_keywords", "complex_keywords"],
                     "properties": {
-                      "code_keywords": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        },
-                        "minItems": 1
-                      },
-                      "reasoning_keywords": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        },
-                        "minItems": 1
-                      },
-                      "technical_keywords": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        },
-                        "minItems": 1
-                      },
                       "simple_keywords": {
                         "type": "array",
+                        "description": "Reference phrases for the SIMPLE tier (50 built-in defaults)",
                         "items": {
-                          "type": "string"
+                          "type": "string",
+                          "maxLength": 2000
                         },
                         "minItems": 1
+                      },
+                      "medium_keywords": {
+                        "type": "array",
+                        "description": "Reference phrases for the MEDIUM tier (50 built-in defaults)",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "minItems": 1
+                      },
+                      "complex_keywords": {
+                        "type": "array",
+                        "description": "Reference phrases for the COMPLEX tier (50 built-in defaults)",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "minItems": 1
+                      }
+                    }
+                  },
+                  "semantic": {
+                    "type": "object",
+                    "description": "Embedding configuration for semantic complexity classification. When absent,\nno complexity tier is published and rules referencing complexity_tier fall\nthrough. The provider must have an enabled key.\n",
+                    "additionalProperties": false,
+                    "required": ["provider", "embedding_model"],
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Provider used for embedding calls (must have an enabled key)"
+                      },
+                      "embedding_model": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Embedding model, e.g. text-embedding-3-small"
+                      },
+                      "timeout": {
+                        "description": "Ceiling on the inline embedding call. Accepts a duration string (\"1.5s\") or milliseconds as a number. Default 1.5s; exceeding it publishes no tier for that request.",
+                        "oneOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                          },
+                          {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          }
+                        ]
+                      },
+                      "min_similarity": {
+                        "type": "number",
+                        "minimum": 0,
+                        "exclusiveMaximum": 1,
+                        "description": "Similarity floor for the nearest reference phrase; below it no tier is published. 0 (default) accepts the nearest eligible match. Compared against the vector store backend's own similarity scale (raw cosine for chromem/Qdrant/Pinecone/Redis, certainty for Weaviate)."
+                      },
+                      "message_history_count": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Number of recent user messages joined oldest-first into the embedded text. 1 (default) embeds only the latest message. System prompts and assistant replies are never embedded."
+                      },
+                      "count_toward_budgets": {
+                        "type": "boolean",
+                        "description": "Whether embedding usage counts toward virtual-key budgets (default false)"
+                      },
+                      "vector_store": {
+                        "type": "string",
+                        "enum": ["embedded", "vector_store"],
+                        "description": "Where reference-phrase embeddings live. `embedded` (default) uses the\nbuilt-in in-memory store, so phrases are re-embedded on every restart.\n`vector_store` uses the top-level `vector_store` when one is configured\nand falls back to the embedded store otherwise.\n"
+                      },
+                      "fallback": {
+                        "type": "string",
+                        "enum": ["none", "llm"],
+                        "description": "What answers when semantic classification produces no tier (a match\nbelow `min_similarity`, a timeout, or an unfinished warmup). `none`\n(the default) records the request as skipped. `llm` asks the chat\nmodel configured in the analyzer's `llm` block, which is required\nwhen this is set.\n"
+                      }
+                    }
+                  },
+                  "llm": {
+                    "type": "object",
+                    "description": "Chat-completion (LLM) fallback classifier settings. The block is inert\nunless `semantic.fallback` selects `llm`; the classifier runs only after\nsemantic classification produces no tier. Tier names (SIMPLE, MEDIUM,\nCOMPLEX) and the response format are fixed: the gateway always appends a\nnon-editable reinforcement stating them.\n",
+                    "additionalProperties": false,
+                    "required": ["provider", "model"],
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Provider used to run the classification chat completion (must have an enabled key)"
+                      },
+                      "model": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Chat model asked to name the tier. Every fallback classification waits on one completion from this model, so pick a small, fast one."
+                      },
+                      "timeout": {
+                        "description": "Per-request classification timeout. Accepts a duration string (\"2s\") or milliseconds as a number. Default 4s. On timeout no complexity tier is published and the request is recorded as skipped.",
+                        "oneOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                          },
+                          {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          }
+                        ]
+                      },
+                      "prompt": {
+                        "type": "string",
+                        "maxLength": 4000,
+                        "description": "Replaces the shipped classification guidance (max 4000 characters); empty means the shipped guidance is used. The tier-name and response-format reinforcement is appended by the gateway either way and cannot be edited."
+                      },
+                      "message_history_count": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "How many of the most recent user messages are given to the classifier, oldest first (default 1, the latest message only). Only user turns count; system prompts and assistant replies are never sent."
+                      },
+                      "count_toward_budgets": {
+                        "type": "boolean",
+                        "description": "Whether classification completion cost counts toward virtual-key budgets (record-only, never enforced; default false)"
+                      }
+                    }
+                  },
+                  "session": {
+                    "type": "object",
+                    "description": "Session-aware complexity routing. When enabled and a request carries a supported session identity, Bifrost retains the highest tier observed across normally sequential turns for 24 hours of inactivity. Overlapping requests for the same session are best-effort and resolve by last writer wins.",
+                    "additionalProperties": false,
+                    "required": ["enabled"],
+                    "properties": {
+                      "enabled": {
+                        "type": "boolean",
+                        "description": "Enable monotonic session tier retention. Requires semantic complexity classification; default is false."
                       }
                     }
                   }
@@ -65327,29 +65618,64 @@
                   "type": "object",
                   "description": "Full runtime configuration for complexity routing analysis.",
                   "additionalProperties": false,
-                  "required": ["tier_boundaries", "keywords"],
+                  "required": ["keywords"],
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "session": {
+                            "properties": {
+                              "enabled": {
+                                "const": true
+                              }
+                            },
+                            "required": ["enabled"]
+                          }
+                        },
+                        "required": ["session"]
+                      },
+                      "then": {
+                        "required": ["semantic"]
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "semantic": {
+                            "properties": {
+                              "fallback": {
+                                "const": "llm"
+                              }
+                            },
+                            "required": ["fallback"]
+                          }
+                        },
+                        "required": ["semantic"]
+                      },
+                      "then": {
+                        "required": ["llm"]
+                      }
+                    }
+                  ],
                   "properties": {
                     "tier_boundaries": {
                       "type": "object",
-                      "description": "Score thresholds for complexity tier classification. All values must satisfy 0 < simple_medium < medium_complex < complex_reasoning < 1.",
+                      "deprecated": true,
+                      "description": "Deprecated score thresholds for the retired lexical complexity classifier.\nThis block is optional and ignored by semantic classification, but remains\naccepted for backward compatibility. When supplied, values must satisfy\n0 < simple_medium < medium_complex < 1.\n",
                       "additionalProperties": false,
-                      "required": ["simple_medium", "medium_complex", "complex_reasoning"],
+                      "required": ["simple_medium", "medium_complex"],
                       "properties": {
                         "simple_medium": {
                           "type": "number",
-                          "description": "Score boundary between SIMPLE and MEDIUM tiers",
+                          "deprecated": true,
+                          "description": "Deprecated score boundary between SIMPLE and MEDIUM tiers (ignored by semantic classification)",
                           "exclusiveMinimum": 0,
                           "exclusiveMaximum": 1
                         },
                         "medium_complex": {
                           "type": "number",
-                          "description": "Score boundary between MEDIUM and COMPLEX tiers",
-                          "exclusiveMinimum": 0,
-                          "exclusiveMaximum": 1
-                        },
-                        "complex_reasoning": {
-                          "type": "number",
-                          "description": "Score boundary between COMPLEX and REASONING tiers",
+                          "deprecated": true,
+                          "description": "Deprecated score boundary between MEDIUM and COMPLEX tiers (ignored by semantic classification)",
                           "exclusiveMinimum": 0,
                           "exclusiveMaximum": 1
                         }
@@ -65357,42 +65683,151 @@
                     },
                     "keywords": {
                       "type": "object",
-                      "description": "Editable keyword lists used by the complexity analyzer. Only the four user-facing\ndimensions are exposed; `reasoning_keywords` entries drive the reasoning tier\noverride. Matching is normalized to lowercase and duplicates are removed on save.\n",
+                      "description": "Reference phrases for semantic complexity classification, one list per tier.\nEach request is embedded and takes the tier of its nearest phrase. Entries\nshould be whole example prompts rather than individual keywords. Each phrase\nis limited to 2000 characters, the normalized lists may contain at most 750\nphrases combined, and the same phrase cannot appear in two tiers. The field\nnames predate semantic classification and are kept for backward compatibility.\n",
                       "additionalProperties": false,
-                      "required": [
-                        "code_keywords",
-                        "reasoning_keywords",
-                        "technical_keywords",
-                        "simple_keywords"
-                      ],
+                      "required": ["simple_keywords", "medium_keywords", "complex_keywords"],
                       "properties": {
-                        "code_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
-                        "reasoning_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
-                        "technical_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
                         "simple_keywords": {
                           "type": "array",
+                          "description": "Reference phrases for the SIMPLE tier (50 built-in defaults)",
                           "items": {
-                            "type": "string"
+                            "type": "string",
+                            "maxLength": 2000
                           },
                           "minItems": 1
+                        },
+                        "medium_keywords": {
+                          "type": "array",
+                          "description": "Reference phrases for the MEDIUM tier (50 built-in defaults)",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          "minItems": 1
+                        },
+                        "complex_keywords": {
+                          "type": "array",
+                          "description": "Reference phrases for the COMPLEX tier (50 built-in defaults)",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    "semantic": {
+                      "type": "object",
+                      "description": "Embedding configuration for semantic complexity classification. When absent,\nno complexity tier is published and rules referencing complexity_tier fall\nthrough. The provider must have an enabled key.\n",
+                      "additionalProperties": false,
+                      "required": ["provider", "embedding_model"],
+                      "properties": {
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Provider used for embedding calls (must have an enabled key)"
+                        },
+                        "embedding_model": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Embedding model, e.g. text-embedding-3-small"
+                        },
+                        "timeout": {
+                          "description": "Ceiling on the inline embedding call. Accepts a duration string (\"1.5s\") or milliseconds as a number. Default 1.5s; exceeding it publishes no tier for that request.",
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                            },
+                            {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            }
+                          ]
+                        },
+                        "min_similarity": {
+                          "type": "number",
+                          "minimum": 0,
+                          "exclusiveMaximum": 1,
+                          "description": "Similarity floor for the nearest reference phrase; below it no tier is published. 0 (default) accepts the nearest eligible match. Compared against the vector store backend's own similarity scale (raw cosine for chromem/Qdrant/Pinecone/Redis, certainty for Weaviate)."
+                        },
+                        "message_history_count": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 10,
+                          "description": "Number of recent user messages joined oldest-first into the embedded text. 1 (default) embeds only the latest message. System prompts and assistant replies are never embedded."
+                        },
+                        "count_toward_budgets": {
+                          "type": "boolean",
+                          "description": "Whether embedding usage counts toward virtual-key budgets (default false)"
+                        },
+                        "vector_store": {
+                          "type": "string",
+                          "enum": ["embedded", "vector_store"],
+                          "description": "Where reference-phrase embeddings live. `embedded` (default) uses the\nbuilt-in in-memory store, so phrases are re-embedded on every restart.\n`vector_store` uses the top-level `vector_store` when one is configured\nand falls back to the embedded store otherwise.\n"
+                        },
+                        "fallback": {
+                          "type": "string",
+                          "enum": ["none", "llm"],
+                          "description": "What answers when semantic classification produces no tier (a match\nbelow `min_similarity`, a timeout, or an unfinished warmup). `none`\n(the default) records the request as skipped. `llm` asks the chat\nmodel configured in the analyzer's `llm` block, which is required\nwhen this is set.\n"
+                        }
+                      }
+                    },
+                    "llm": {
+                      "type": "object",
+                      "description": "Chat-completion (LLM) fallback classifier settings. The block is inert\nunless `semantic.fallback` selects `llm`; the classifier runs only after\nsemantic classification produces no tier. Tier names (SIMPLE, MEDIUM,\nCOMPLEX) and the response format are fixed: the gateway always appends a\nnon-editable reinforcement stating them.\n",
+                      "additionalProperties": false,
+                      "required": ["provider", "model"],
+                      "properties": {
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Provider used to run the classification chat completion (must have an enabled key)"
+                        },
+                        "model": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Chat model asked to name the tier. Every fallback classification waits on one completion from this model, so pick a small, fast one."
+                        },
+                        "timeout": {
+                          "description": "Per-request classification timeout. Accepts a duration string (\"2s\") or milliseconds as a number. Default 4s. On timeout no complexity tier is published and the request is recorded as skipped.",
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                            },
+                            {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            }
+                          ]
+                        },
+                        "prompt": {
+                          "type": "string",
+                          "maxLength": 4000,
+                          "description": "Replaces the shipped classification guidance (max 4000 characters); empty means the shipped guidance is used. The tier-name and response-format reinforcement is appended by the gateway either way and cannot be edited."
+                        },
+                        "message_history_count": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 10,
+                          "description": "How many of the most recent user messages are given to the classifier, oldest first (default 1, the latest message only). Only user turns count; system prompts and assistant replies are never sent."
+                        },
+                        "count_toward_budgets": {
+                          "type": "boolean",
+                          "description": "Whether classification completion cost counts toward virtual-key budgets (record-only, never enforced; default false)"
+                        }
+                      }
+                    },
+                    "session": {
+                      "type": "object",
+                      "description": "Session-aware complexity routing. When enabled and a request carries a supported session identity, Bifrost retains the highest tier observed across normally sequential turns for 24 hours of inactivity. Overlapping requests for the same session are best-effort and resolve by last writer wins.",
+                      "additionalProperties": false,
+                      "required": ["enabled"],
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean",
+                          "description": "Enable monotonic session tier retention. Requires semantic complexity classification; default is false."
                         }
                       }
                     }
@@ -65438,7 +65873,7 @@
       "post": {
         "operationId": "resetComplexityAnalyzerConfig",
         "summary": "Reset complexity analyzer config",
-        "description": "Restores the built-in complexity analyzer runtime config defaults and hot-reloads the routing plugin.",
+        "description": "Restores the built-in reference phrase lists and hot-reloads the routing plugin. The saved embedding provider, model, storage configuration, and llm fallback configuration are preserved.",
         "tags": ["Routing"],
         "security": [
           {
@@ -65454,29 +65889,64 @@
                   "type": "object",
                   "description": "Full runtime configuration for complexity routing analysis.",
                   "additionalProperties": false,
-                  "required": ["tier_boundaries", "keywords"],
+                  "required": ["keywords"],
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "session": {
+                            "properties": {
+                              "enabled": {
+                                "const": true
+                              }
+                            },
+                            "required": ["enabled"]
+                          }
+                        },
+                        "required": ["session"]
+                      },
+                      "then": {
+                        "required": ["semantic"]
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "semantic": {
+                            "properties": {
+                              "fallback": {
+                                "const": "llm"
+                              }
+                            },
+                            "required": ["fallback"]
+                          }
+                        },
+                        "required": ["semantic"]
+                      },
+                      "then": {
+                        "required": ["llm"]
+                      }
+                    }
+                  ],
                   "properties": {
                     "tier_boundaries": {
                       "type": "object",
-                      "description": "Score thresholds for complexity tier classification. All values must satisfy 0 < simple_medium < medium_complex < complex_reasoning < 1.",
+                      "deprecated": true,
+                      "description": "Deprecated score thresholds for the retired lexical complexity classifier.\nThis block is optional and ignored by semantic classification, but remains\naccepted for backward compatibility. When supplied, values must satisfy\n0 < simple_medium < medium_complex < 1.\n",
                       "additionalProperties": false,
-                      "required": ["simple_medium", "medium_complex", "complex_reasoning"],
+                      "required": ["simple_medium", "medium_complex"],
                       "properties": {
                         "simple_medium": {
                           "type": "number",
-                          "description": "Score boundary between SIMPLE and MEDIUM tiers",
+                          "deprecated": true,
+                          "description": "Deprecated score boundary between SIMPLE and MEDIUM tiers (ignored by semantic classification)",
                           "exclusiveMinimum": 0,
                           "exclusiveMaximum": 1
                         },
                         "medium_complex": {
                           "type": "number",
-                          "description": "Score boundary between MEDIUM and COMPLEX tiers",
-                          "exclusiveMinimum": 0,
-                          "exclusiveMaximum": 1
-                        },
-                        "complex_reasoning": {
-                          "type": "number",
-                          "description": "Score boundary between COMPLEX and REASONING tiers",
+                          "deprecated": true,
+                          "description": "Deprecated score boundary between MEDIUM and COMPLEX tiers (ignored by semantic classification)",
                           "exclusiveMinimum": 0,
                           "exclusiveMaximum": 1
                         }
@@ -65484,42 +65954,151 @@
                     },
                     "keywords": {
                       "type": "object",
-                      "description": "Editable keyword lists used by the complexity analyzer. Only the four user-facing\ndimensions are exposed; `reasoning_keywords` entries drive the reasoning tier\noverride. Matching is normalized to lowercase and duplicates are removed on save.\n",
+                      "description": "Reference phrases for semantic complexity classification, one list per tier.\nEach request is embedded and takes the tier of its nearest phrase. Entries\nshould be whole example prompts rather than individual keywords. Each phrase\nis limited to 2000 characters, the normalized lists may contain at most 750\nphrases combined, and the same phrase cannot appear in two tiers. The field\nnames predate semantic classification and are kept for backward compatibility.\n",
                       "additionalProperties": false,
-                      "required": [
-                        "code_keywords",
-                        "reasoning_keywords",
-                        "technical_keywords",
-                        "simple_keywords"
-                      ],
+                      "required": ["simple_keywords", "medium_keywords", "complex_keywords"],
                       "properties": {
-                        "code_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
-                        "reasoning_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
-                        "technical_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
                         "simple_keywords": {
                           "type": "array",
+                          "description": "Reference phrases for the SIMPLE tier (50 built-in defaults)",
                           "items": {
-                            "type": "string"
+                            "type": "string",
+                            "maxLength": 2000
                           },
                           "minItems": 1
+                        },
+                        "medium_keywords": {
+                          "type": "array",
+                          "description": "Reference phrases for the MEDIUM tier (50 built-in defaults)",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          "minItems": 1
+                        },
+                        "complex_keywords": {
+                          "type": "array",
+                          "description": "Reference phrases for the COMPLEX tier (50 built-in defaults)",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    "semantic": {
+                      "type": "object",
+                      "description": "Embedding configuration for semantic complexity classification. When absent,\nno complexity tier is published and rules referencing complexity_tier fall\nthrough. The provider must have an enabled key.\n",
+                      "additionalProperties": false,
+                      "required": ["provider", "embedding_model"],
+                      "properties": {
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Provider used for embedding calls (must have an enabled key)"
+                        },
+                        "embedding_model": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Embedding model, e.g. text-embedding-3-small"
+                        },
+                        "timeout": {
+                          "description": "Ceiling on the inline embedding call. Accepts a duration string (\"1.5s\") or milliseconds as a number. Default 1.5s; exceeding it publishes no tier for that request.",
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                            },
+                            {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            }
+                          ]
+                        },
+                        "min_similarity": {
+                          "type": "number",
+                          "minimum": 0,
+                          "exclusiveMaximum": 1,
+                          "description": "Similarity floor for the nearest reference phrase; below it no tier is published. 0 (default) accepts the nearest eligible match. Compared against the vector store backend's own similarity scale (raw cosine for chromem/Qdrant/Pinecone/Redis, certainty for Weaviate)."
+                        },
+                        "message_history_count": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 10,
+                          "description": "Number of recent user messages joined oldest-first into the embedded text. 1 (default) embeds only the latest message. System prompts and assistant replies are never embedded."
+                        },
+                        "count_toward_budgets": {
+                          "type": "boolean",
+                          "description": "Whether embedding usage counts toward virtual-key budgets (default false)"
+                        },
+                        "vector_store": {
+                          "type": "string",
+                          "enum": ["embedded", "vector_store"],
+                          "description": "Where reference-phrase embeddings live. `embedded` (default) uses the\nbuilt-in in-memory store, so phrases are re-embedded on every restart.\n`vector_store` uses the top-level `vector_store` when one is configured\nand falls back to the embedded store otherwise.\n"
+                        },
+                        "fallback": {
+                          "type": "string",
+                          "enum": ["none", "llm"],
+                          "description": "What answers when semantic classification produces no tier (a match\nbelow `min_similarity`, a timeout, or an unfinished warmup). `none`\n(the default) records the request as skipped. `llm` asks the chat\nmodel configured in the analyzer's `llm` block, which is required\nwhen this is set.\n"
+                        }
+                      }
+                    },
+                    "llm": {
+                      "type": "object",
+                      "description": "Chat-completion (LLM) fallback classifier settings. The block is inert\nunless `semantic.fallback` selects `llm`; the classifier runs only after\nsemantic classification produces no tier. Tier names (SIMPLE, MEDIUM,\nCOMPLEX) and the response format are fixed: the gateway always appends a\nnon-editable reinforcement stating them.\n",
+                      "additionalProperties": false,
+                      "required": ["provider", "model"],
+                      "properties": {
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Provider used to run the classification chat completion (must have an enabled key)"
+                        },
+                        "model": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Chat model asked to name the tier. Every fallback classification waits on one completion from this model, so pick a small, fast one."
+                        },
+                        "timeout": {
+                          "description": "Per-request classification timeout. Accepts a duration string (\"2s\") or milliseconds as a number. Default 4s. On timeout no complexity tier is published and the request is recorded as skipped.",
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                            },
+                            {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            }
+                          ]
+                        },
+                        "prompt": {
+                          "type": "string",
+                          "maxLength": 4000,
+                          "description": "Replaces the shipped classification guidance (max 4000 characters); empty means the shipped guidance is used. The tier-name and response-format reinforcement is appended by the gateway either way and cannot be edited."
+                        },
+                        "message_history_count": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 10,
+                          "description": "How many of the most recent user messages are given to the classifier, oldest first (default 1, the latest message only). Only user turns count; system prompts and assistant replies are never sent."
+                        },
+                        "count_toward_budgets": {
+                          "type": "boolean",
+                          "description": "Whether classification completion cost counts toward virtual-key budgets (record-only, never enforced; default false)"
+                        }
+                      }
+                    },
+                    "session": {
+                      "type": "object",
+                      "description": "Session-aware complexity routing. When enabled and a request carries a supported session identity, Bifrost retains the highest tier observed across normally sequential turns for 24 hours of inactivity. Overlapping requests for the same session are best-effort and resolve by last writer wins.",
+                      "additionalProperties": false,
+                      "required": ["enabled"],
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean",
+                          "description": "Enable monotonic session tier retention. Requires semantic complexity classification; default is false."
                         }
                       }
                     }
@@ -65540,6 +66119,244 @@
           },
           "503": {
             "description": "Config store not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/routing/complexity-analyzer-status": {
+      "get": {
+        "operationId": "getComplexityAnalyzerStatus",
+        "summary": "Get complexity classifier status",
+        "description": "Returns the runtime status of the semantic complexity classifier (disabled, warming, ready, or failed), including warmup progress and whether a previous generation is still serving. When the llm fallback block is configured, also returns its readiness and the shipped default classification prompt.",
+        "tags": ["Routing"],
+        "responses": {
+          "200": {
+            "description": "Complexity classifier status retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Runtime status of the semantic complexity classifier and, when configured, the LLM fallback classifier. Never contains phrases, embeddings, or provider secrets.",
+                  "properties": {
+                    "state": {
+                      "type": "string",
+                      "enum": ["disabled", "warming", "ready", "failed"],
+                      "description": "disabled = no embedding configuration; warming = reference phrases are being embedded; ready = serving the current configuration; failed = the desired configuration failed to warm"
+                    },
+                    "loaded": {
+                      "type": "integer",
+                      "description": "Reference phrases embedded so far in the current warmup"
+                    },
+                    "total": {
+                      "type": "integer",
+                      "description": "Total reference phrases to embed in the current warmup"
+                    },
+                    "serving_previous": {
+                      "type": "boolean",
+                      "description": "When true with state=failed, the previous generation is still serving while the new one failed to warm"
+                    },
+                    "failure_reason": {
+                      "type": "string",
+                      "enum": [
+                        "authentication",
+                        "model_unavailable",
+                        "rate_limited",
+                        "timeout",
+                        "provider_unavailable",
+                        "vector_store_unavailable",
+                        "invalid_response",
+                        "unknown"
+                      ],
+                      "description": "Category of a warmup failure when state=failed. Provider and backend error bodies stay in server logs; this bounded vocabulary is what status clients receive."
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "Warmup failure detail when state=failed"
+                    },
+                    "cached_phrases": {
+                      "type": "integer",
+                      "description": "How many phrase vectors the gateway currently holds in process for the configured provider and model. The cache is in-process only, since vectors cannot be read back out of a vector store, so a restart empties it while the saved phrases look unchanged. Zero means the next save re-embeds every phrase regardless of what changed."
+                    },
+                    "storage_mode": {
+                      "type": "string",
+                      "enum": ["embedded", "vector_store"],
+                      "description": "Where exemplar vectors are actually kept, which is not always what was configured. semantic.vector_store=vector_store degrades to embedded whenever no top-level vector store is configured, so this reports what is in force rather than what was asked for. Absent until a store has been resolved."
+                    },
+                    "namespace": {
+                      "type": "string",
+                      "description": "The fingerprinted namespace the serving generation queries, for example BifrostComplexityRouter_<hash>. The backend holds no phrase text, so this is the only handle on the records the classifier owns in a shared vector store. Absent while nothing is serving."
+                    },
+                    "llm": {
+                      "type": "object",
+                      "description": "Always present in the response. state is disabled when no llm block is configured.",
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "enum": ["disabled", "ready"],
+                          "description": "disabled = no llm configuration; ready = the llm block is configured. The classifier has no warmup, so it is ready as soon as it is saved."
+                        }
+                      }
+                    },
+                    "llm_default_prompt": {
+                      "type": "string",
+                      "description": "The shipped classification guidance, served so a configuration client can seed its prompt editor and offer a reset without holding a copy that drifts from the gateway's. Always present in the response, regardless of whether an llm block is configured."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Config store not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/routing/complexity-analyzer-generations": {
+      "get": {
+        "operationId": "listComplexityGenerations",
+        "summary": "List complexity classifier generations",
+        "description": "Lists the exemplar generations held in the vector store for semantic complexity routing, flagging the one currently serving. Every configuration change mints a new fingerprinted generation; a node-local store reclaims the previous one automatically, but on a shared external store retired generations are kept because another replica may still be serving them. The store holds no phrase text, so this listing is the only way to identify what has accumulated.",
+        "tags": ["Routing"],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Generations retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "The exemplar generations the vector store currently holds for semantic complexity routing.",
+                  "properties": {
+                    "generations": {
+                      "type": "array",
+                      "description": "One entry per fingerprinted namespace, ordered by name. Empty when no vector store has been resolved.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "namespace": {
+                            "type": "string",
+                            "description": "The fingerprinted namespace holding the generation.",
+                            "example": "BifrostComplexityRouter_943f4d9a1b0502568b4dc4911c81cfa8c8b3fb3eb71311e732c95b18003cfdb5"
+                          },
+                          "active": {
+                            "type": "boolean",
+                            "description": "Whether classification currently queries this generation. Exactly one is active while the classifier is ready; every other entry is retired and unreachable by any request."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The vector store could not be enumerated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/routing/complexity-analyzer-generations/{namespace}": {
+      "delete": {
+        "operationId": "deleteComplexityGeneration",
+        "summary": "Delete a retired complexity generation",
+        "description": "Removes one retired exemplar generation and the vectors it holds. The serving generation is refused, as are namespaces outside the classifier's own naming scheme, so this cannot drop an unrelated collection sharing the same backend. Deleting a generation that is already gone succeeds.",
+        "tags": ["Routing"],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "namespace",
+            "in": "path",
+            "required": true,
+            "description": "The fingerprinted namespace to remove, as returned by the generations listing.",
+            "schema": {
+              "type": "string",
+              "example": "BifrostComplexityRouter_943f4d9a1b0502568b4dc4911c81cfa8c8b3fb3eb71311e732c95b18003cfdb5"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Generation deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "deleted"
+                    },
+                    "namespace": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The namespace is not a complexity routing generation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The generation is currently serving classification requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The vector store could not be reached",
             "content": {
               "application/json": {
                 "schema": {
@@ -65856,7 +66673,7 @@
         "operationId": "getComplexityAnalyzerConfigLegacy",
         "deprecated": true,
         "summary": "Get complexity analyzer config (deprecated path)",
-        "description": "Returns the full complexity analyzer runtime config, including tier thresholds and editable keyword lists. Returns built-in defaults if none have been configured. Deprecated, use /api/routing/complexity-analyzer-config instead. This path is kept for backwards compatibility and behaves identically.",
+        "description": "Returns the full complexity analyzer runtime config, including the semantic embedding configuration, the llm fallback classifier configuration, and per-tier reference phrase lists. Returns built-in defaults if none have been configured. Deprecated, use /api/routing/complexity-analyzer-config instead. This path is kept for backwards compatibility and behaves identically.",
         "tags": ["Routing"],
         "security": [
           {
@@ -65872,29 +66689,64 @@
                   "type": "object",
                   "description": "Full runtime configuration for complexity routing analysis.",
                   "additionalProperties": false,
-                  "required": ["tier_boundaries", "keywords"],
+                  "required": ["keywords"],
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "session": {
+                            "properties": {
+                              "enabled": {
+                                "const": true
+                              }
+                            },
+                            "required": ["enabled"]
+                          }
+                        },
+                        "required": ["session"]
+                      },
+                      "then": {
+                        "required": ["semantic"]
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "semantic": {
+                            "properties": {
+                              "fallback": {
+                                "const": "llm"
+                              }
+                            },
+                            "required": ["fallback"]
+                          }
+                        },
+                        "required": ["semantic"]
+                      },
+                      "then": {
+                        "required": ["llm"]
+                      }
+                    }
+                  ],
                   "properties": {
                     "tier_boundaries": {
                       "type": "object",
-                      "description": "Score thresholds for complexity tier classification. All values must satisfy 0 < simple_medium < medium_complex < complex_reasoning < 1.",
+                      "deprecated": true,
+                      "description": "Deprecated score thresholds for the retired lexical complexity classifier.\nThis block is optional and ignored by semantic classification, but remains\naccepted for backward compatibility. When supplied, values must satisfy\n0 < simple_medium < medium_complex < 1.\n",
                       "additionalProperties": false,
-                      "required": ["simple_medium", "medium_complex", "complex_reasoning"],
+                      "required": ["simple_medium", "medium_complex"],
                       "properties": {
                         "simple_medium": {
                           "type": "number",
-                          "description": "Score boundary between SIMPLE and MEDIUM tiers",
+                          "deprecated": true,
+                          "description": "Deprecated score boundary between SIMPLE and MEDIUM tiers (ignored by semantic classification)",
                           "exclusiveMinimum": 0,
                           "exclusiveMaximum": 1
                         },
                         "medium_complex": {
                           "type": "number",
-                          "description": "Score boundary between MEDIUM and COMPLEX tiers",
-                          "exclusiveMinimum": 0,
-                          "exclusiveMaximum": 1
-                        },
-                        "complex_reasoning": {
-                          "type": "number",
-                          "description": "Score boundary between COMPLEX and REASONING tiers",
+                          "deprecated": true,
+                          "description": "Deprecated score boundary between MEDIUM and COMPLEX tiers (ignored by semantic classification)",
                           "exclusiveMinimum": 0,
                           "exclusiveMaximum": 1
                         }
@@ -65902,42 +66754,151 @@
                     },
                     "keywords": {
                       "type": "object",
-                      "description": "Editable keyword lists used by the complexity analyzer. Only the four user-facing\ndimensions are exposed; `reasoning_keywords` entries drive the reasoning tier\noverride. Matching is normalized to lowercase and duplicates are removed on save.\n",
+                      "description": "Reference phrases for semantic complexity classification, one list per tier.\nEach request is embedded and takes the tier of its nearest phrase. Entries\nshould be whole example prompts rather than individual keywords. Each phrase\nis limited to 2000 characters, the normalized lists may contain at most 750\nphrases combined, and the same phrase cannot appear in two tiers. The field\nnames predate semantic classification and are kept for backward compatibility.\n",
                       "additionalProperties": false,
-                      "required": [
-                        "code_keywords",
-                        "reasoning_keywords",
-                        "technical_keywords",
-                        "simple_keywords"
-                      ],
+                      "required": ["simple_keywords", "medium_keywords", "complex_keywords"],
                       "properties": {
-                        "code_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
-                        "reasoning_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
-                        "technical_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
                         "simple_keywords": {
                           "type": "array",
+                          "description": "Reference phrases for the SIMPLE tier (50 built-in defaults)",
                           "items": {
-                            "type": "string"
+                            "type": "string",
+                            "maxLength": 2000
                           },
                           "minItems": 1
+                        },
+                        "medium_keywords": {
+                          "type": "array",
+                          "description": "Reference phrases for the MEDIUM tier (50 built-in defaults)",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          "minItems": 1
+                        },
+                        "complex_keywords": {
+                          "type": "array",
+                          "description": "Reference phrases for the COMPLEX tier (50 built-in defaults)",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    "semantic": {
+                      "type": "object",
+                      "description": "Embedding configuration for semantic complexity classification. When absent,\nno complexity tier is published and rules referencing complexity_tier fall\nthrough. The provider must have an enabled key.\n",
+                      "additionalProperties": false,
+                      "required": ["provider", "embedding_model"],
+                      "properties": {
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Provider used for embedding calls (must have an enabled key)"
+                        },
+                        "embedding_model": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Embedding model, e.g. text-embedding-3-small"
+                        },
+                        "timeout": {
+                          "description": "Ceiling on the inline embedding call. Accepts a duration string (\"1.5s\") or milliseconds as a number. Default 1.5s; exceeding it publishes no tier for that request.",
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                            },
+                            {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            }
+                          ]
+                        },
+                        "min_similarity": {
+                          "type": "number",
+                          "minimum": 0,
+                          "exclusiveMaximum": 1,
+                          "description": "Similarity floor for the nearest reference phrase; below it no tier is published. 0 (default) accepts the nearest eligible match. Compared against the vector store backend's own similarity scale (raw cosine for chromem/Qdrant/Pinecone/Redis, certainty for Weaviate)."
+                        },
+                        "message_history_count": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 10,
+                          "description": "Number of recent user messages joined oldest-first into the embedded text. 1 (default) embeds only the latest message. System prompts and assistant replies are never embedded."
+                        },
+                        "count_toward_budgets": {
+                          "type": "boolean",
+                          "description": "Whether embedding usage counts toward virtual-key budgets (default false)"
+                        },
+                        "vector_store": {
+                          "type": "string",
+                          "enum": ["embedded", "vector_store"],
+                          "description": "Where reference-phrase embeddings live. `embedded` (default) uses the\nbuilt-in in-memory store, so phrases are re-embedded on every restart.\n`vector_store` uses the top-level `vector_store` when one is configured\nand falls back to the embedded store otherwise.\n"
+                        },
+                        "fallback": {
+                          "type": "string",
+                          "enum": ["none", "llm"],
+                          "description": "What answers when semantic classification produces no tier (a match\nbelow `min_similarity`, a timeout, or an unfinished warmup). `none`\n(the default) records the request as skipped. `llm` asks the chat\nmodel configured in the analyzer's `llm` block, which is required\nwhen this is set.\n"
+                        }
+                      }
+                    },
+                    "llm": {
+                      "type": "object",
+                      "description": "Chat-completion (LLM) fallback classifier settings. The block is inert\nunless `semantic.fallback` selects `llm`; the classifier runs only after\nsemantic classification produces no tier. Tier names (SIMPLE, MEDIUM,\nCOMPLEX) and the response format are fixed: the gateway always appends a\nnon-editable reinforcement stating them.\n",
+                      "additionalProperties": false,
+                      "required": ["provider", "model"],
+                      "properties": {
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Provider used to run the classification chat completion (must have an enabled key)"
+                        },
+                        "model": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Chat model asked to name the tier. Every fallback classification waits on one completion from this model, so pick a small, fast one."
+                        },
+                        "timeout": {
+                          "description": "Per-request classification timeout. Accepts a duration string (\"2s\") or milliseconds as a number. Default 4s. On timeout no complexity tier is published and the request is recorded as skipped.",
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                            },
+                            {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            }
+                          ]
+                        },
+                        "prompt": {
+                          "type": "string",
+                          "maxLength": 4000,
+                          "description": "Replaces the shipped classification guidance (max 4000 characters); empty means the shipped guidance is used. The tier-name and response-format reinforcement is appended by the gateway either way and cannot be edited."
+                        },
+                        "message_history_count": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 10,
+                          "description": "How many of the most recent user messages are given to the classifier, oldest first (default 1, the latest message only). Only user turns count; system prompts and assistant replies are never sent."
+                        },
+                        "count_toward_budgets": {
+                          "type": "boolean",
+                          "description": "Whether classification completion cost counts toward virtual-key budgets (record-only, never enforced; default false)"
+                        }
+                      }
+                    },
+                    "session": {
+                      "type": "object",
+                      "description": "Session-aware complexity routing. When enabled and a request carries a supported session identity, Bifrost retains the highest tier observed across normally sequential turns for 24 hours of inactivity. Overlapping requests for the same session are best-effort and resolve by last writer wins.",
+                      "additionalProperties": false,
+                      "required": ["enabled"],
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean",
+                          "description": "Enable monotonic session tier retention. Requires semantic complexity classification; default is false."
                         }
                       }
                     }
@@ -65972,7 +66933,7 @@
         "operationId": "updateComplexityAnalyzerConfigLegacy",
         "deprecated": true,
         "summary": "Update complexity analyzer config (deprecated path)",
-        "description": "Replaces the full complexity analyzer runtime config and hot-reloads the routing plugin. Tier thresholds must satisfy 0 < simple_medium < medium_complex < complex_reasoning < 1. Deprecated, use /api/routing/complexity-analyzer-config instead. This path is kept for backwards compatibility and behaves identically.",
+        "description": "Replaces the full complexity analyzer runtime config and hot-reloads the routing plugin. Changing the embedding configuration or reference phrases triggers a background re-warm of the classifier; unchanged phrases are not re-embedded. Setting semantic.fallback to llm requires the llm block to be present. Deprecated, use /api/routing/complexity-analyzer-config instead. This path is kept for backwards compatibility and behaves identically.",
         "tags": ["Routing"],
         "requestBody": {
           "required": true,
@@ -65982,29 +66943,64 @@
                 "type": "object",
                 "description": "Full runtime configuration for complexity routing analysis.",
                 "additionalProperties": false,
-                "required": ["tier_boundaries", "keywords"],
+                "required": ["keywords"],
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "session": {
+                          "properties": {
+                            "enabled": {
+                              "const": true
+                            }
+                          },
+                          "required": ["enabled"]
+                        }
+                      },
+                      "required": ["session"]
+                    },
+                    "then": {
+                      "required": ["semantic"]
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "semantic": {
+                          "properties": {
+                            "fallback": {
+                              "const": "llm"
+                            }
+                          },
+                          "required": ["fallback"]
+                        }
+                      },
+                      "required": ["semantic"]
+                    },
+                    "then": {
+                      "required": ["llm"]
+                    }
+                  }
+                ],
                 "properties": {
                   "tier_boundaries": {
                     "type": "object",
-                    "description": "Score thresholds for complexity tier classification. All values must satisfy 0 < simple_medium < medium_complex < complex_reasoning < 1.",
+                    "deprecated": true,
+                    "description": "Deprecated score thresholds for the retired lexical complexity classifier.\nThis block is optional and ignored by semantic classification, but remains\naccepted for backward compatibility. When supplied, values must satisfy\n0 < simple_medium < medium_complex < 1.\n",
                     "additionalProperties": false,
-                    "required": ["simple_medium", "medium_complex", "complex_reasoning"],
+                    "required": ["simple_medium", "medium_complex"],
                     "properties": {
                       "simple_medium": {
                         "type": "number",
-                        "description": "Score boundary between SIMPLE and MEDIUM tiers",
+                        "deprecated": true,
+                        "description": "Deprecated score boundary between SIMPLE and MEDIUM tiers (ignored by semantic classification)",
                         "exclusiveMinimum": 0,
                         "exclusiveMaximum": 1
                       },
                       "medium_complex": {
                         "type": "number",
-                        "description": "Score boundary between MEDIUM and COMPLEX tiers",
-                        "exclusiveMinimum": 0,
-                        "exclusiveMaximum": 1
-                      },
-                      "complex_reasoning": {
-                        "type": "number",
-                        "description": "Score boundary between COMPLEX and REASONING tiers",
+                        "deprecated": true,
+                        "description": "Deprecated score boundary between MEDIUM and COMPLEX tiers (ignored by semantic classification)",
                         "exclusiveMinimum": 0,
                         "exclusiveMaximum": 1
                       }
@@ -66012,42 +67008,151 @@
                   },
                   "keywords": {
                     "type": "object",
-                    "description": "Editable keyword lists used by the complexity analyzer. Only the four user-facing\ndimensions are exposed; `reasoning_keywords` entries drive the reasoning tier\noverride. Matching is normalized to lowercase and duplicates are removed on save.\n",
+                    "description": "Reference phrases for semantic complexity classification, one list per tier.\nEach request is embedded and takes the tier of its nearest phrase. Entries\nshould be whole example prompts rather than individual keywords. Each phrase\nis limited to 2000 characters, the normalized lists may contain at most 750\nphrases combined, and the same phrase cannot appear in two tiers. The field\nnames predate semantic classification and are kept for backward compatibility.\n",
                     "additionalProperties": false,
-                    "required": [
-                      "code_keywords",
-                      "reasoning_keywords",
-                      "technical_keywords",
-                      "simple_keywords"
-                    ],
+                    "required": ["simple_keywords", "medium_keywords", "complex_keywords"],
                     "properties": {
-                      "code_keywords": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        },
-                        "minItems": 1
-                      },
-                      "reasoning_keywords": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        },
-                        "minItems": 1
-                      },
-                      "technical_keywords": {
-                        "type": "array",
-                        "items": {
-                          "type": "string"
-                        },
-                        "minItems": 1
-                      },
                       "simple_keywords": {
                         "type": "array",
+                        "description": "Reference phrases for the SIMPLE tier (50 built-in defaults)",
                         "items": {
-                          "type": "string"
+                          "type": "string",
+                          "maxLength": 2000
                         },
                         "minItems": 1
+                      },
+                      "medium_keywords": {
+                        "type": "array",
+                        "description": "Reference phrases for the MEDIUM tier (50 built-in defaults)",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "minItems": 1
+                      },
+                      "complex_keywords": {
+                        "type": "array",
+                        "description": "Reference phrases for the COMPLEX tier (50 built-in defaults)",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 2000
+                        },
+                        "minItems": 1
+                      }
+                    }
+                  },
+                  "semantic": {
+                    "type": "object",
+                    "description": "Embedding configuration for semantic complexity classification. When absent,\nno complexity tier is published and rules referencing complexity_tier fall\nthrough. The provider must have an enabled key.\n",
+                    "additionalProperties": false,
+                    "required": ["provider", "embedding_model"],
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Provider used for embedding calls (must have an enabled key)"
+                      },
+                      "embedding_model": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Embedding model, e.g. text-embedding-3-small"
+                      },
+                      "timeout": {
+                        "description": "Ceiling on the inline embedding call. Accepts a duration string (\"1.5s\") or milliseconds as a number. Default 1.5s; exceeding it publishes no tier for that request.",
+                        "oneOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                          },
+                          {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          }
+                        ]
+                      },
+                      "min_similarity": {
+                        "type": "number",
+                        "minimum": 0,
+                        "exclusiveMaximum": 1,
+                        "description": "Similarity floor for the nearest reference phrase; below it no tier is published. 0 (default) accepts the nearest eligible match. Compared against the vector store backend's own similarity scale (raw cosine for chromem/Qdrant/Pinecone/Redis, certainty for Weaviate)."
+                      },
+                      "message_history_count": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Number of recent user messages joined oldest-first into the embedded text. 1 (default) embeds only the latest message. System prompts and assistant replies are never embedded."
+                      },
+                      "count_toward_budgets": {
+                        "type": "boolean",
+                        "description": "Whether embedding usage counts toward virtual-key budgets (default false)"
+                      },
+                      "vector_store": {
+                        "type": "string",
+                        "enum": ["embedded", "vector_store"],
+                        "description": "Where reference-phrase embeddings live. `embedded` (default) uses the\nbuilt-in in-memory store, so phrases are re-embedded on every restart.\n`vector_store` uses the top-level `vector_store` when one is configured\nand falls back to the embedded store otherwise.\n"
+                      },
+                      "fallback": {
+                        "type": "string",
+                        "enum": ["none", "llm"],
+                        "description": "What answers when semantic classification produces no tier (a match\nbelow `min_similarity`, a timeout, or an unfinished warmup). `none`\n(the default) records the request as skipped. `llm` asks the chat\nmodel configured in the analyzer's `llm` block, which is required\nwhen this is set.\n"
+                      }
+                    }
+                  },
+                  "llm": {
+                    "type": "object",
+                    "description": "Chat-completion (LLM) fallback classifier settings. The block is inert\nunless `semantic.fallback` selects `llm`; the classifier runs only after\nsemantic classification produces no tier. Tier names (SIMPLE, MEDIUM,\nCOMPLEX) and the response format are fixed: the gateway always appends a\nnon-editable reinforcement stating them.\n",
+                    "additionalProperties": false,
+                    "required": ["provider", "model"],
+                    "properties": {
+                      "provider": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Provider used to run the classification chat completion (must have an enabled key)"
+                      },
+                      "model": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Chat model asked to name the tier. Every fallback classification waits on one completion from this model, so pick a small, fast one."
+                      },
+                      "timeout": {
+                        "description": "Per-request classification timeout. Accepts a duration string (\"2s\") or milliseconds as a number. Default 4s. On timeout no complexity tier is published and the request is recorded as skipped.",
+                        "oneOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                          },
+                          {
+                            "type": "number",
+                            "exclusiveMinimum": 0
+                          }
+                        ]
+                      },
+                      "prompt": {
+                        "type": "string",
+                        "maxLength": 4000,
+                        "description": "Replaces the shipped classification guidance (max 4000 characters); empty means the shipped guidance is used. The tier-name and response-format reinforcement is appended by the gateway either way and cannot be edited."
+                      },
+                      "message_history_count": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "How many of the most recent user messages are given to the classifier, oldest first (default 1, the latest message only). Only user turns count; system prompts and assistant replies are never sent."
+                      },
+                      "count_toward_budgets": {
+                        "type": "boolean",
+                        "description": "Whether classification completion cost counts toward virtual-key budgets (record-only, never enforced; default false)"
+                      }
+                    }
+                  },
+                  "session": {
+                    "type": "object",
+                    "description": "Session-aware complexity routing. When enabled and a request carries a supported session identity, Bifrost retains the highest tier observed across normally sequential turns for 24 hours of inactivity. Overlapping requests for the same session are best-effort and resolve by last writer wins.",
+                    "additionalProperties": false,
+                    "required": ["enabled"],
+                    "properties": {
+                      "enabled": {
+                        "type": "boolean",
+                        "description": "Enable monotonic session tier retention. Requires semantic complexity classification; default is false."
                       }
                     }
                   }
@@ -66070,29 +67175,64 @@
                   "type": "object",
                   "description": "Full runtime configuration for complexity routing analysis.",
                   "additionalProperties": false,
-                  "required": ["tier_boundaries", "keywords"],
+                  "required": ["keywords"],
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "session": {
+                            "properties": {
+                              "enabled": {
+                                "const": true
+                              }
+                            },
+                            "required": ["enabled"]
+                          }
+                        },
+                        "required": ["session"]
+                      },
+                      "then": {
+                        "required": ["semantic"]
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "semantic": {
+                            "properties": {
+                              "fallback": {
+                                "const": "llm"
+                              }
+                            },
+                            "required": ["fallback"]
+                          }
+                        },
+                        "required": ["semantic"]
+                      },
+                      "then": {
+                        "required": ["llm"]
+                      }
+                    }
+                  ],
                   "properties": {
                     "tier_boundaries": {
                       "type": "object",
-                      "description": "Score thresholds for complexity tier classification. All values must satisfy 0 < simple_medium < medium_complex < complex_reasoning < 1.",
+                      "deprecated": true,
+                      "description": "Deprecated score thresholds for the retired lexical complexity classifier.\nThis block is optional and ignored by semantic classification, but remains\naccepted for backward compatibility. When supplied, values must satisfy\n0 < simple_medium < medium_complex < 1.\n",
                       "additionalProperties": false,
-                      "required": ["simple_medium", "medium_complex", "complex_reasoning"],
+                      "required": ["simple_medium", "medium_complex"],
                       "properties": {
                         "simple_medium": {
                           "type": "number",
-                          "description": "Score boundary between SIMPLE and MEDIUM tiers",
+                          "deprecated": true,
+                          "description": "Deprecated score boundary between SIMPLE and MEDIUM tiers (ignored by semantic classification)",
                           "exclusiveMinimum": 0,
                           "exclusiveMaximum": 1
                         },
                         "medium_complex": {
                           "type": "number",
-                          "description": "Score boundary between MEDIUM and COMPLEX tiers",
-                          "exclusiveMinimum": 0,
-                          "exclusiveMaximum": 1
-                        },
-                        "complex_reasoning": {
-                          "type": "number",
-                          "description": "Score boundary between COMPLEX and REASONING tiers",
+                          "deprecated": true,
+                          "description": "Deprecated score boundary between MEDIUM and COMPLEX tiers (ignored by semantic classification)",
                           "exclusiveMinimum": 0,
                           "exclusiveMaximum": 1
                         }
@@ -66100,42 +67240,151 @@
                     },
                     "keywords": {
                       "type": "object",
-                      "description": "Editable keyword lists used by the complexity analyzer. Only the four user-facing\ndimensions are exposed; `reasoning_keywords` entries drive the reasoning tier\noverride. Matching is normalized to lowercase and duplicates are removed on save.\n",
+                      "description": "Reference phrases for semantic complexity classification, one list per tier.\nEach request is embedded and takes the tier of its nearest phrase. Entries\nshould be whole example prompts rather than individual keywords. Each phrase\nis limited to 2000 characters, the normalized lists may contain at most 750\nphrases combined, and the same phrase cannot appear in two tiers. The field\nnames predate semantic classification and are kept for backward compatibility.\n",
                       "additionalProperties": false,
-                      "required": [
-                        "code_keywords",
-                        "reasoning_keywords",
-                        "technical_keywords",
-                        "simple_keywords"
-                      ],
+                      "required": ["simple_keywords", "medium_keywords", "complex_keywords"],
                       "properties": {
-                        "code_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
-                        "reasoning_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
-                        "technical_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
                         "simple_keywords": {
                           "type": "array",
+                          "description": "Reference phrases for the SIMPLE tier (50 built-in defaults)",
                           "items": {
-                            "type": "string"
+                            "type": "string",
+                            "maxLength": 2000
                           },
                           "minItems": 1
+                        },
+                        "medium_keywords": {
+                          "type": "array",
+                          "description": "Reference phrases for the MEDIUM tier (50 built-in defaults)",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          "minItems": 1
+                        },
+                        "complex_keywords": {
+                          "type": "array",
+                          "description": "Reference phrases for the COMPLEX tier (50 built-in defaults)",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    "semantic": {
+                      "type": "object",
+                      "description": "Embedding configuration for semantic complexity classification. When absent,\nno complexity tier is published and rules referencing complexity_tier fall\nthrough. The provider must have an enabled key.\n",
+                      "additionalProperties": false,
+                      "required": ["provider", "embedding_model"],
+                      "properties": {
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Provider used for embedding calls (must have an enabled key)"
+                        },
+                        "embedding_model": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Embedding model, e.g. text-embedding-3-small"
+                        },
+                        "timeout": {
+                          "description": "Ceiling on the inline embedding call. Accepts a duration string (\"1.5s\") or milliseconds as a number. Default 1.5s; exceeding it publishes no tier for that request.",
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                            },
+                            {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            }
+                          ]
+                        },
+                        "min_similarity": {
+                          "type": "number",
+                          "minimum": 0,
+                          "exclusiveMaximum": 1,
+                          "description": "Similarity floor for the nearest reference phrase; below it no tier is published. 0 (default) accepts the nearest eligible match. Compared against the vector store backend's own similarity scale (raw cosine for chromem/Qdrant/Pinecone/Redis, certainty for Weaviate)."
+                        },
+                        "message_history_count": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 10,
+                          "description": "Number of recent user messages joined oldest-first into the embedded text. 1 (default) embeds only the latest message. System prompts and assistant replies are never embedded."
+                        },
+                        "count_toward_budgets": {
+                          "type": "boolean",
+                          "description": "Whether embedding usage counts toward virtual-key budgets (default false)"
+                        },
+                        "vector_store": {
+                          "type": "string",
+                          "enum": ["embedded", "vector_store"],
+                          "description": "Where reference-phrase embeddings live. `embedded` (default) uses the\nbuilt-in in-memory store, so phrases are re-embedded on every restart.\n`vector_store` uses the top-level `vector_store` when one is configured\nand falls back to the embedded store otherwise.\n"
+                        },
+                        "fallback": {
+                          "type": "string",
+                          "enum": ["none", "llm"],
+                          "description": "What answers when semantic classification produces no tier (a match\nbelow `min_similarity`, a timeout, or an unfinished warmup). `none`\n(the default) records the request as skipped. `llm` asks the chat\nmodel configured in the analyzer's `llm` block, which is required\nwhen this is set.\n"
+                        }
+                      }
+                    },
+                    "llm": {
+                      "type": "object",
+                      "description": "Chat-completion (LLM) fallback classifier settings. The block is inert\nunless `semantic.fallback` selects `llm`; the classifier runs only after\nsemantic classification produces no tier. Tier names (SIMPLE, MEDIUM,\nCOMPLEX) and the response format are fixed: the gateway always appends a\nnon-editable reinforcement stating them.\n",
+                      "additionalProperties": false,
+                      "required": ["provider", "model"],
+                      "properties": {
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Provider used to run the classification chat completion (must have an enabled key)"
+                        },
+                        "model": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Chat model asked to name the tier. Every fallback classification waits on one completion from this model, so pick a small, fast one."
+                        },
+                        "timeout": {
+                          "description": "Per-request classification timeout. Accepts a duration string (\"2s\") or milliseconds as a number. Default 4s. On timeout no complexity tier is published and the request is recorded as skipped.",
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                            },
+                            {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            }
+                          ]
+                        },
+                        "prompt": {
+                          "type": "string",
+                          "maxLength": 4000,
+                          "description": "Replaces the shipped classification guidance (max 4000 characters); empty means the shipped guidance is used. The tier-name and response-format reinforcement is appended by the gateway either way and cannot be edited."
+                        },
+                        "message_history_count": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 10,
+                          "description": "How many of the most recent user messages are given to the classifier, oldest first (default 1, the latest message only). Only user turns count; system prompts and assistant replies are never sent."
+                        },
+                        "count_toward_budgets": {
+                          "type": "boolean",
+                          "description": "Whether classification completion cost counts toward virtual-key budgets (record-only, never enforced; default false)"
+                        }
+                      }
+                    },
+                    "session": {
+                      "type": "object",
+                      "description": "Session-aware complexity routing. When enabled and a request carries a supported session identity, Bifrost retains the highest tier observed across normally sequential turns for 24 hours of inactivity. Overlapping requests for the same session are best-effort and resolve by last writer wins.",
+                      "additionalProperties": false,
+                      "required": ["enabled"],
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean",
+                          "description": "Enable monotonic session tier retention. Requires semantic complexity classification; default is false."
                         }
                       }
                     }
@@ -66182,7 +67431,7 @@
         "operationId": "resetComplexityAnalyzerConfigLegacy",
         "deprecated": true,
         "summary": "Reset complexity analyzer config (deprecated path)",
-        "description": "Restores the built-in complexity analyzer runtime config defaults and hot-reloads the routing plugin. Deprecated, use /api/routing/complexity-analyzer-config/reset instead. This path is kept for backwards compatibility and behaves identically.",
+        "description": "Restores the built-in reference phrase lists and hot-reloads the routing plugin. The saved embedding provider, model, storage configuration, and llm fallback configuration are preserved. Deprecated, use /api/routing/complexity-analyzer-config/reset instead. This path is kept for backwards compatibility and behaves identically.",
         "tags": ["Routing"],
         "security": [
           {
@@ -66198,29 +67447,64 @@
                   "type": "object",
                   "description": "Full runtime configuration for complexity routing analysis.",
                   "additionalProperties": false,
-                  "required": ["tier_boundaries", "keywords"],
+                  "required": ["keywords"],
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "session": {
+                            "properties": {
+                              "enabled": {
+                                "const": true
+                              }
+                            },
+                            "required": ["enabled"]
+                          }
+                        },
+                        "required": ["session"]
+                      },
+                      "then": {
+                        "required": ["semantic"]
+                      }
+                    },
+                    {
+                      "if": {
+                        "properties": {
+                          "semantic": {
+                            "properties": {
+                              "fallback": {
+                                "const": "llm"
+                              }
+                            },
+                            "required": ["fallback"]
+                          }
+                        },
+                        "required": ["semantic"]
+                      },
+                      "then": {
+                        "required": ["llm"]
+                      }
+                    }
+                  ],
                   "properties": {
                     "tier_boundaries": {
                       "type": "object",
-                      "description": "Score thresholds for complexity tier classification. All values must satisfy 0 < simple_medium < medium_complex < complex_reasoning < 1.",
+                      "deprecated": true,
+                      "description": "Deprecated score thresholds for the retired lexical complexity classifier.\nThis block is optional and ignored by semantic classification, but remains\naccepted for backward compatibility. When supplied, values must satisfy\n0 < simple_medium < medium_complex < 1.\n",
                       "additionalProperties": false,
-                      "required": ["simple_medium", "medium_complex", "complex_reasoning"],
+                      "required": ["simple_medium", "medium_complex"],
                       "properties": {
                         "simple_medium": {
                           "type": "number",
-                          "description": "Score boundary between SIMPLE and MEDIUM tiers",
+                          "deprecated": true,
+                          "description": "Deprecated score boundary between SIMPLE and MEDIUM tiers (ignored by semantic classification)",
                           "exclusiveMinimum": 0,
                           "exclusiveMaximum": 1
                         },
                         "medium_complex": {
                           "type": "number",
-                          "description": "Score boundary between MEDIUM and COMPLEX tiers",
-                          "exclusiveMinimum": 0,
-                          "exclusiveMaximum": 1
-                        },
-                        "complex_reasoning": {
-                          "type": "number",
-                          "description": "Score boundary between COMPLEX and REASONING tiers",
+                          "deprecated": true,
+                          "description": "Deprecated score boundary between MEDIUM and COMPLEX tiers (ignored by semantic classification)",
                           "exclusiveMinimum": 0,
                           "exclusiveMaximum": 1
                         }
@@ -66228,42 +67512,151 @@
                     },
                     "keywords": {
                       "type": "object",
-                      "description": "Editable keyword lists used by the complexity analyzer. Only the four user-facing\ndimensions are exposed; `reasoning_keywords` entries drive the reasoning tier\noverride. Matching is normalized to lowercase and duplicates are removed on save.\n",
+                      "description": "Reference phrases for semantic complexity classification, one list per tier.\nEach request is embedded and takes the tier of its nearest phrase. Entries\nshould be whole example prompts rather than individual keywords. Each phrase\nis limited to 2000 characters, the normalized lists may contain at most 750\nphrases combined, and the same phrase cannot appear in two tiers. The field\nnames predate semantic classification and are kept for backward compatibility.\n",
                       "additionalProperties": false,
-                      "required": [
-                        "code_keywords",
-                        "reasoning_keywords",
-                        "technical_keywords",
-                        "simple_keywords"
-                      ],
+                      "required": ["simple_keywords", "medium_keywords", "complex_keywords"],
                       "properties": {
-                        "code_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
-                        "reasoning_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
-                        "technical_keywords": {
-                          "type": "array",
-                          "items": {
-                            "type": "string"
-                          },
-                          "minItems": 1
-                        },
                         "simple_keywords": {
                           "type": "array",
+                          "description": "Reference phrases for the SIMPLE tier (50 built-in defaults)",
                           "items": {
-                            "type": "string"
+                            "type": "string",
+                            "maxLength": 2000
                           },
                           "minItems": 1
+                        },
+                        "medium_keywords": {
+                          "type": "array",
+                          "description": "Reference phrases for the MEDIUM tier (50 built-in defaults)",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          "minItems": 1
+                        },
+                        "complex_keywords": {
+                          "type": "array",
+                          "description": "Reference phrases for the COMPLEX tier (50 built-in defaults)",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 2000
+                          },
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    "semantic": {
+                      "type": "object",
+                      "description": "Embedding configuration for semantic complexity classification. When absent,\nno complexity tier is published and rules referencing complexity_tier fall\nthrough. The provider must have an enabled key.\n",
+                      "additionalProperties": false,
+                      "required": ["provider", "embedding_model"],
+                      "properties": {
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Provider used for embedding calls (must have an enabled key)"
+                        },
+                        "embedding_model": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Embedding model, e.g. text-embedding-3-small"
+                        },
+                        "timeout": {
+                          "description": "Ceiling on the inline embedding call. Accepts a duration string (\"1.5s\") or milliseconds as a number. Default 1.5s; exceeding it publishes no tier for that request.",
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                            },
+                            {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            }
+                          ]
+                        },
+                        "min_similarity": {
+                          "type": "number",
+                          "minimum": 0,
+                          "exclusiveMaximum": 1,
+                          "description": "Similarity floor for the nearest reference phrase; below it no tier is published. 0 (default) accepts the nearest eligible match. Compared against the vector store backend's own similarity scale (raw cosine for chromem/Qdrant/Pinecone/Redis, certainty for Weaviate)."
+                        },
+                        "message_history_count": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 10,
+                          "description": "Number of recent user messages joined oldest-first into the embedded text. 1 (default) embeds only the latest message. System prompts and assistant replies are never embedded."
+                        },
+                        "count_toward_budgets": {
+                          "type": "boolean",
+                          "description": "Whether embedding usage counts toward virtual-key budgets (default false)"
+                        },
+                        "vector_store": {
+                          "type": "string",
+                          "enum": ["embedded", "vector_store"],
+                          "description": "Where reference-phrase embeddings live. `embedded` (default) uses the\nbuilt-in in-memory store, so phrases are re-embedded on every restart.\n`vector_store` uses the top-level `vector_store` when one is configured\nand falls back to the embedded store otherwise.\n"
+                        },
+                        "fallback": {
+                          "type": "string",
+                          "enum": ["none", "llm"],
+                          "description": "What answers when semantic classification produces no tier (a match\nbelow `min_similarity`, a timeout, or an unfinished warmup). `none`\n(the default) records the request as skipped. `llm` asks the chat\nmodel configured in the analyzer's `llm` block, which is required\nwhen this is set.\n"
+                        }
+                      }
+                    },
+                    "llm": {
+                      "type": "object",
+                      "description": "Chat-completion (LLM) fallback classifier settings. The block is inert\nunless `semantic.fallback` selects `llm`; the classifier runs only after\nsemantic classification produces no tier. Tier names (SIMPLE, MEDIUM,\nCOMPLEX) and the response format are fixed: the gateway always appends a\nnon-editable reinforcement stating them.\n",
+                      "additionalProperties": false,
+                      "required": ["provider", "model"],
+                      "properties": {
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Provider used to run the classification chat completion (must have an enabled key)"
+                        },
+                        "model": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Chat model asked to name the tier. Every fallback classification waits on one completion from this model, so pick a small, fast one."
+                        },
+                        "timeout": {
+                          "description": "Per-request classification timeout. Accepts a duration string (\"2s\") or milliseconds as a number. Default 4s. On timeout no complexity tier is published and the request is recorded as skipped.",
+                          "oneOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                            },
+                            {
+                              "type": "number",
+                              "exclusiveMinimum": 0
+                            }
+                          ]
+                        },
+                        "prompt": {
+                          "type": "string",
+                          "maxLength": 4000,
+                          "description": "Replaces the shipped classification guidance (max 4000 characters); empty means the shipped guidance is used. The tier-name and response-format reinforcement is appended by the gateway either way and cannot be edited."
+                        },
+                        "message_history_count": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 10,
+                          "description": "How many of the most recent user messages are given to the classifier, oldest first (default 1, the latest message only). Only user turns count; system prompts and assistant replies are never sent."
+                        },
+                        "count_toward_budgets": {
+                          "type": "boolean",
+                          "description": "Whether classification completion cost counts toward virtual-key budgets (record-only, never enforced; default false)"
+                        }
+                      }
+                    },
+                    "session": {
+                      "type": "object",
+                      "description": "Session-aware complexity routing. When enabled and a request carries a supported session identity, Bifrost retains the highest tier observed across normally sequential turns for 24 hours of inactivity. Overlapping requests for the same session are best-effort and resolve by last writer wins.",
+                      "additionalProperties": false,
+                      "required": ["enabled"],
+                      "properties": {
+                        "enabled": {
+                          "type": "boolean",
+                          "description": "Enable monotonic session tier retention. Requires semantic complexity classification; default is false."
                         }
                       }
                     }
@@ -66351,6 +67744,14 @@
             }
           },
           {
+            "name": "project_ids",
+            "in": "query",
+            "description": "Comma-separated list of project IDs to filter by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "routing_rule_ids",
             "in": "query",
             "description": "Comma-separated list of routing rule IDs to filter by",
@@ -66362,6 +67763,22 @@
             "name": "routing_engine_used",
             "in": "query",
             "description": "Comma-separated list of routing engines to filter by (routing-rule, governance, or loadbalancing)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "complexity_tiers",
+            "in": "query",
+            "description": "Comma-separated list of routing complexity tiers to filter by (SIMPLE, MEDIUM, COMPLEX, or the legacy REASONING tier recorded on historical rows before it was merged into COMPLEX)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "complexity_mechanisms",
+            "in": "query",
+            "description": "Comma-separated list of complexity decision mechanisms to filter by (semantic, llm, session, or skipped)",
             "schema": {
               "type": "string"
             }
@@ -66915,6 +68332,14 @@
             }
           },
           {
+            "name": "project_ids",
+            "in": "query",
+            "description": "Comma-separated list of project IDs to filter by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "routing_rule_ids",
             "in": "query",
             "description": "Comma-separated list of routing rule IDs to filter by",
@@ -66926,6 +68351,22 @@
             "name": "routing_engine_used",
             "in": "query",
             "description": "Comma-separated list of routing engines to filter by (routing-rule, governance, or loadbalancing)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "complexity_tiers",
+            "in": "query",
+            "description": "Comma-separated list of routing complexity tiers to filter by (SIMPLE, MEDIUM, COMPLEX, or the legacy REASONING tier recorded on historical rows before it was merged into COMPLEX)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "complexity_mechanisms",
+            "in": "query",
+            "description": "Comma-separated list of complexity decision mechanisms to filter by (semantic, llm, session, or skipped)",
             "schema": {
               "type": "string"
             }
@@ -67023,7 +68464,7 @@
           {
             "name": "compare_to_previous",
             "in": "query",
-            "description": "When true, also return the same statistics for the immediately preceding window of equal length, so callers can render change-vs-previous-period. Requires a bounded window of positive length (start_time and end_time, or period) and no `request_id`, since an id lookup matches one row regardless of the window. Where there is no preceding window to compare against, the response omits `previous` with `has_previous_period` false. A failure to compute the previous period degrades to `has_previous_period` false rather than failing the request.",
+            "description": "When true, also return the same statistics for the immediately preceding window of equal length, so callers can render change-vs-previous-period. Requires a bounded window (start_time and end_time, or period); an unbounded all-time filter has no preceding window, and the response then omits `previous` with `has_previous_period` false. A failure to compute the previous period degrades to `has_previous_period` false rather than failing the request.",
             "schema": {
               "type": "boolean",
               "default": false
@@ -67160,6 +68601,14 @@
             "name": "business_unit_ids",
             "in": "query",
             "description": "Comma-separated list of business unit IDs to filter by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_ids",
+            "in": "query",
+            "description": "Comma-separated list of project IDs to filter by",
             "schema": {
               "type": "string"
             }
@@ -67438,6 +68887,14 @@
             }
           },
           {
+            "name": "project_ids",
+            "in": "query",
+            "description": "Comma-separated list of project IDs to filter by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "routing_rule_ids",
             "in": "query",
             "description": "Comma-separated list of routing rule IDs to filter by",
@@ -67666,6 +69123,14 @@
             "name": "virtual_key_ids",
             "in": "query",
             "description": "Comma-separated list of virtual key IDs to filter by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_ids",
+            "in": "query",
+            "description": "Comma-separated list of project IDs to filter by",
             "schema": {
               "type": "string"
             }
@@ -67904,6 +69369,14 @@
             "name": "virtual_key_ids",
             "in": "query",
             "description": "Comma-separated list of virtual key IDs to filter by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_ids",
+            "in": "query",
+            "description": "Comma-separated list of project IDs to filter by",
             "schema": {
               "type": "string"
             }
@@ -68158,6 +69631,14 @@
             }
           },
           {
+            "name": "project_ids",
+            "in": "query",
+            "description": "Comma-separated list of project IDs to filter by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "routing_rule_ids",
             "in": "query",
             "description": "Comma-separated list of routing rule IDs to filter by",
@@ -68395,6 +69876,14 @@
             }
           },
           {
+            "name": "project_ids",
+            "in": "query",
+            "description": "Comma-separated list of project IDs to filter by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "routing_rule_ids",
             "in": "query",
             "description": "Comma-separated list of routing rule IDs to filter by",
@@ -68627,6 +70116,14 @@
             "name": "virtual_key_ids",
             "in": "query",
             "description": "Comma-separated list of virtual key IDs to filter by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_ids",
+            "in": "query",
+            "description": "Comma-separated list of project IDs to filter by",
             "schema": {
               "type": "string"
             }
@@ -68881,6 +70378,14 @@
             }
           },
           {
+            "name": "project_ids",
+            "in": "query",
+            "description": "Comma-separated list of project IDs to filter by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "routing_rule_ids",
             "in": "query",
             "description": "Comma-separated list of routing rule IDs to filter by",
@@ -69082,7 +70587,7 @@
       "get": {
         "operationId": "getLogsDimensionCostHistogram",
         "summary": "Get cost histogram by dimension",
-        "description": "Returns time-bucketed cost data grouped by an arbitrary dimension\n(`provider`, `team_id`, `customer_id`, `user_id`, `business_unit_id`).\nThe dimension is supplied via the required `dimension` query parameter.\n",
+        "description": "Returns time-bucketed cost data grouped by an arbitrary dimension\n(`provider`, `team_id`, `customer_id`, `user_id`, `business_unit_id`,\n`project_id`, `app`, `user_agent`). The dimension is supplied via the\nrequired `dimension` query parameter.\n",
         "tags": ["Logging"],
         "parameters": [
           {
@@ -69093,7 +70598,16 @@
             "schema": {
               "type": "string",
               "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n",
-              "enum": ["provider", "team_id", "customer_id", "user_id", "business_unit_id"]
+              "enum": [
+                "provider",
+                "team_id",
+                "customer_id",
+                "user_id",
+                "business_unit_id",
+                "project_id",
+                "app",
+                "user_agent"
+              ]
             }
           },
           {
@@ -69140,6 +70654,14 @@
             "name": "virtual_key_ids",
             "in": "query",
             "description": "Comma-separated list of virtual key IDs to filter by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_ids",
+            "in": "query",
+            "description": "Comma-separated list of project IDs to filter by",
             "schema": {
               "type": "string"
             }
@@ -69295,7 +70817,16 @@
                     "dimension": {
                       "type": "string",
                       "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n",
-                      "enum": ["provider", "team_id", "customer_id", "user_id", "business_unit_id"]
+                      "enum": [
+                        "provider",
+                        "team_id",
+                        "customer_id",
+                        "user_id",
+                        "business_unit_id",
+                        "project_id",
+                        "app",
+                        "user_agent"
+                      ]
                     },
                     "dimension_values": {
                       "type": "array",
@@ -69346,7 +70877,16 @@
             "schema": {
               "type": "string",
               "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n",
-              "enum": ["provider", "team_id", "customer_id", "user_id", "business_unit_id"]
+              "enum": [
+                "provider",
+                "team_id",
+                "customer_id",
+                "user_id",
+                "business_unit_id",
+                "project_id",
+                "app",
+                "user_agent"
+              ]
             }
           },
           {
@@ -69393,6 +70933,14 @@
             "name": "virtual_key_ids",
             "in": "query",
             "description": "Comma-separated list of virtual key IDs to filter by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_ids",
+            "in": "query",
+            "description": "Comma-separated list of project IDs to filter by",
             "schema": {
               "type": "string"
             }
@@ -69559,7 +71107,16 @@
                     "dimension": {
                       "type": "string",
                       "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n",
-                      "enum": ["provider", "team_id", "customer_id", "user_id", "business_unit_id"]
+                      "enum": [
+                        "provider",
+                        "team_id",
+                        "customer_id",
+                        "user_id",
+                        "business_unit_id",
+                        "project_id",
+                        "app",
+                        "user_agent"
+                      ]
                     },
                     "dimension_values": {
                       "type": "array",
@@ -69610,7 +71167,16 @@
             "schema": {
               "type": "string",
               "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n",
-              "enum": ["provider", "team_id", "customer_id", "user_id", "business_unit_id"]
+              "enum": [
+                "provider",
+                "team_id",
+                "customer_id",
+                "user_id",
+                "business_unit_id",
+                "project_id",
+                "app",
+                "user_agent"
+              ]
             }
           },
           {
@@ -69657,6 +71223,14 @@
             "name": "virtual_key_ids",
             "in": "query",
             "description": "Comma-separated list of virtual key IDs to filter by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_ids",
+            "in": "query",
+            "description": "Comma-separated list of project IDs to filter by",
             "schema": {
               "type": "string"
             }
@@ -69827,7 +71401,16 @@
                     "dimension": {
                       "type": "string",
                       "description": "Grouping dimension for dimension-aware histograms. Used by the\n`/api/logs/histogram/{cost,tokens,latency}/by-dimension` endpoints.\n",
-                      "enum": ["provider", "team_id", "customer_id", "user_id", "business_unit_id"]
+                      "enum": [
+                        "provider",
+                        "team_id",
+                        "customer_id",
+                        "user_id",
+                        "business_unit_id",
+                        "project_id",
+                        "app",
+                        "user_agent"
+                      ]
                     },
                     "dimension_values": {
                       "type": "array",
@@ -70056,6 +71639,14 @@
             "name": "business_unit_ids",
             "in": "query",
             "description": "Comma-separated list of business unit IDs to filter by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_ids",
+            "in": "query",
+            "description": "Comma-separated list of project IDs to filter by",
             "schema": {
               "type": "string"
             }
@@ -70425,6 +72016,14 @@
             "name": "business_unit_ids",
             "in": "query",
             "description": "Comma-separated list of business unit IDs to filter by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "project_ids",
+            "in": "query",
+            "description": "Comma-separated list of project IDs to filter by",
             "schema": {
               "type": "string"
             }
@@ -71142,7 +72741,7 @@
                     },
                     "dimension_rankings": {
                       "type": "object",
-                      "description": "Ranking tables keyed by dimension (`team`, `user`, `virtual_key`,\n`customer`, `business_unit`); each value is that dimension's rankings.\n",
+                      "description": "Ranking tables keyed by dimension (`team`, `user`, `virtual_key`,\n`customer`, `business_unit`, `project`, `app`, `user_agent`); each\nvalue is that dimension's rankings.\n",
                       "additionalProperties": {
                         "type": "object",
                         "description": "Dimension values ranked by usage with trend comparison",
@@ -71203,7 +72802,16 @@
                           "dimension": {
                             "type": "string",
                             "description": "Entity used to group dimension rankings",
-                            "enum": ["team", "customer", "business_unit", "user", "virtual_key"]
+                            "enum": [
+                              "team",
+                              "customer",
+                              "business_unit",
+                              "project",
+                              "user",
+                              "virtual_key",
+                              "app",
+                              "user_agent"
+                            ]
                           },
                           "total_actual_requests": {
                             "type": "integer",
@@ -77868,30 +79476,38 @@
         "type": "string",
         "description": "AI model provider identifier",
         "enum": [
-          "openai",
-          "azure",
           "anthropic",
+          "azure",
           "bedrock",
-          "cohere",
-          "vertex",
-          "vllm",
-          "mistral",
-          "ollama",
-          "groq",
-          "sgl",
-          "parasail",
-          "perplexity",
-          "replicate",
+          "bedrock_mantle",
           "cerebras",
+          "cohere",
           "deepseek",
           "gemini",
+          "groq",
+          "mistral",
+          "ollama",
+          "opencode-go",
+          "opencode-zen",
+          "openai",
+          "parasail",
+          "perplexity",
+          "sgl",
+          "vertex",
           "openrouter",
           "elevenlabs",
           "huggingface",
           "nebius",
           "xai",
+          "replicate",
+          "vllm",
           "runway",
-          "fireworks"
+          "runware",
+          "fireworks",
+          "sarvam",
+          "wafer",
+          "databricks",
+          "github-copilot"
         ]
       },
       "Fallback": {
@@ -88732,6 +90348,11 @@
                     "type": "boolean",
                     "default": false,
                     "description": "Converts model parameter values that are not supported by the model"
+                  },
+                  "azure_deepseek": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Convert Azure DeepSeek responses requests to chat completions so reasoning is preserved for coding harnesses"
                   }
                 },
                 "additionalProperties": false
@@ -89062,6 +90683,11 @@
                     "type": "boolean",
                     "default": false,
                     "description": "Converts model parameter values that are not supported by the model"
+                  },
+                  "azure_deepseek": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Convert Azure DeepSeek responses requests to chat completions so reasoning is preserved for coding harnesses"
                   }
                 },
                 "additionalProperties": false
@@ -90410,10 +92036,6 @@
             "type": "string",
             "format": "date-time"
           },
-          "version": {
-            "type": "integer",
-            "format": "int16"
-          },
           "updated_at": {
             "type": "string",
             "format": "date-time"
@@ -91414,6 +93036,10 @@
           "calendar_aligned": {
             "type": "boolean"
           },
+          "allow_all_providers": {
+            "type": "boolean",
+            "description": "When true, this virtual key may use every configured provider. provider_configs still apply as optional per-provider overrides (budgets, rate limits, model allow/blacklists, key selection); a provider without a config gets all models, all keys, and no per-provider limits.\n"
+          },
           "team": {
             "$ref": "#/components/schemas/Team"
           },
@@ -91800,6 +93426,11 @@
             "type": "boolean",
             "default": false
           },
+          "allow_all_providers": {
+            "type": "boolean",
+            "default": false,
+            "description": "When true, this virtual key may use every configured provider. provider_configs remain optional per-provider overrides for budgets, rate limits, model allow/blacklists, and key selection.\n"
+          },
           "expires_at": {
             "type": "string",
             "format": "date-time",
@@ -91904,6 +93535,10 @@
           },
           "calendar_aligned": {
             "type": "boolean"
+          },
+          "allow_all_providers": {
+            "type": "boolean",
+            "description": "When true, this virtual key may use every configured provider. provider_configs remain optional per-provider overrides. Omit to leave the current setting unchanged.\n"
           },
           "reset_budget_usage": {
             "type": "boolean",
@@ -94661,6 +96296,22 @@
             "type": "string",
             "nullable": true
           },
+          "complexity_tier": {
+            "type": "string",
+            "enum": ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"],
+            "description": "Complexity tier used for routing; null when no routing rule referenced complexity_tier. REASONING is historical-only — it was merged into COMPLEX and is never emitted for new requests, but survives in log rows recorded under the old scheme.",
+            "nullable": true
+          },
+          "complexity_mechanism": {
+            "type": ["string", "null"],
+            "enum": ["semantic", "llm", "session", "skipped", null],
+            "description": "How the effective complexity tier was determined. session means retained session state supplied the tier; skipped means classification was demanded but produced no tier."
+          },
+          "complexity_score": {
+            "type": "number",
+            "description": "Similarity score of the nearest reference phrase behind the tier. Absent for llm, session, and skipped decisions.",
+            "nullable": true
+          },
           "stream": {
             "type": "boolean"
           },
@@ -95891,18 +97542,17 @@
         }
       },
       "LogStatsResponse": {
-        "description": "Log statistics for the requested window. The current period's fields are at the top level, so a request without `compare_to_previous` returns the LogStats fields unchanged, plus `has_previous_period` false. `has_previous_period` is always present; `previous` appears only when a comparison was requested and computed.",
+        "description": "Log statistics for the requested window. The current period's fields are at the top level, so a request without `compare_to_previous` returns exactly the LogStats shape.",
         "allOf": [
           {
             "$ref": "#/components/schemas/LogStats"
           },
           {
             "type": "object",
-            "required": ["has_previous_period"],
             "properties": {
               "has_previous_period": {
                 "type": "boolean",
-                "description": "Always present. True when `previous` is populated. False when the comparison was not requested, the window is unbounded, or the previous-period query failed."
+                "description": "True when `previous` is populated. False when the comparison was not requested, the window is unbounded, or the previous-period query failed."
               },
               "previous": {
                 "allOf": [

@@ -124,7 +124,7 @@ func applySerializedLogUpdates(
 	updates map[string]interface{},
 	entry *logstore.Log,
 	data *UpdateLogData,
-	cacheDebug *schemas.BifrostCacheDebug,
+	cacheMetadata *schemas.BifrostCacheMetadata,
 	contentLoggingEnabled bool,
 ) {
 	if data.ChatOutput != nil && contentLoggingEnabled {
@@ -184,7 +184,7 @@ func applySerializedLogUpdates(
 		updates["cached_read_tokens"] = entry.CachedReadTokens
 	}
 
-	if cacheDebug != nil {
+	if cacheMetadata != nil {
 		updates["cache_debug"] = entry.CacheDebug
 	}
 	if data.ErrorDetails != nil {
@@ -204,7 +204,7 @@ func (p *LoggerPlugin) updateLogEntry(
 	routingRuleID string,
 	routingRuleName string,
 	numberOfRetries int,
-	cacheDebug *schemas.BifrostCacheDebug,
+	cacheMetadata *schemas.BifrostCacheMetadata,
 	routingEngineLogs string,
 	data *UpdateLogData,
 	contentLoggingEnabled bool,
@@ -326,9 +326,9 @@ func (p *LoggerPlugin) updateLogEntry(
 		updates["cost"] = *data.Cost
 	}
 
-	// Handle cache debug
-	if cacheDebug != nil {
-		tempEntry.CacheDebugParsed = cacheDebug
+	// Handle cache metadata.
+	if cacheMetadata != nil {
+		tempEntry.CacheDebugParsed = cacheMetadata
 		needsSerialization = true
 	}
 
@@ -342,7 +342,7 @@ func (p *LoggerPlugin) updateLogEntry(
 		if err := tempEntry.SerializeFields(); err != nil {
 			p.logger.Error("failed to serialize log update fields: %v", err)
 		} else {
-			applySerializedLogUpdates(updates, tempEntry, data, cacheDebug, contentLoggingEnabled)
+			applySerializedLogUpdates(updates, tempEntry, data, cacheMetadata, contentLoggingEnabled)
 		}
 	}
 
@@ -1287,6 +1287,16 @@ func (p *LoggerPlugin) GetAvailableBusinessUnits(ctx context.Context, limit int,
 	return keyPairResultsToKeyPairs(results), nil
 }
 
+// GetAvailableProjects returns all unique project ID-Name pairs from logs.
+// Uses DISTINCT to avoid loading all rows when only unique values are needed.
+func (p *LoggerPlugin) GetAvailableProjects(ctx context.Context, limit int, query string) ([]KeyPair, error) {
+	results, err := p.store.GetDistinctKeyPairs(ctx, "project_id", "project_name", limit, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get available projects: %w", err)
+	}
+	return keyPairResultsToKeyPairs(results), nil
+}
+
 // GetDimensionCostHistogram returns time-bucketed cost data grouped by the specified dimension.
 // Delegates to the underlying log store which uses materialized views on PostgreSQL for performance.
 func (p *LoggerPlugin) GetDimensionCostHistogram(ctx context.Context, filters logstore.SearchFilters, bucketSizeSeconds int64, dimension logstore.HistogramDimension) (*logstore.DimensionCostHistogramResult, error) {
@@ -1624,7 +1634,7 @@ type billingOutcome struct {
 	breakdown *schemas.BifrostCost
 	err       error
 	// knownZeroCost is captured while the row's payload is still hydrated, because it
-	// is derived from CacheDebugParsed and ReleaseBillingPayloads clears that. Callers
+	// is derived from the cache metadata compatibility field and ReleaseBillingPayloads clears that. Callers
 	// run after the release, so they cannot re-derive it.
 	knownZeroCost bool
 	// batchDebugUpdate is the serialized batch_debug JSON to persist alongside cost,
@@ -2028,11 +2038,11 @@ func (p *LoggerPlugin) calculateCostBreakdownForLog(logEntry *logstore.Log) (*sc
 	}
 
 	usage := logEntry.TokenUsageParsed
-	cacheDebug := logEntry.CacheDebugParsed
-	guardrailDebug := logEntry.GuardrailDebugParsed
+	cacheMetadata := logEntry.CacheDebugParsed
+	guardrailMetadata := logEntry.GuardrailDebugParsed
 
 	// If no cache hit, guardrail call, or usage, we can't calculate cost.
-	if usage == nil && (cacheDebug == nil || !cacheDebug.CacheHit) && guardrailDebug == nil {
+	if usage == nil && (cacheMetadata == nil || !cacheMetadata.CacheHit) && guardrailMetadata == nil {
 		return nil, fmt.Errorf("%w: token usage not available for log %s", errPricingInputsUnavailable, logEntry.ID)
 	}
 
@@ -2042,7 +2052,7 @@ func (p *LoggerPlugin) calculateCostBreakdownForLog(logEntry *logstore.Log) (*sc
 	// unpriceable and revisited by every MissingCostOnly pass. A guardrail judge
 	// call is billed separately (AdditionalCost) even on a cache hit, so fall
 	// through when one ran instead of discarding that charge.
-	if isKnownZeroCostLog(logEntry) && guardrailDebug == nil {
+	if isKnownZeroCostLog(logEntry) && guardrailMetadata == nil {
 		return nil, nil
 	}
 
@@ -2059,7 +2069,7 @@ func (p *LoggerPlugin) calculateCostBreakdownForLog(logEntry *logstore.Log) (*sc
 	}
 
 	requestType := normalizeLogRequestType(logEntry.Object)
-	if requestType == "" && (cacheDebug == nil || !cacheDebug.CacheHit) && guardrailDebug == nil {
+	if requestType == "" && (cacheMetadata == nil || !cacheMetadata.CacheHit) && guardrailMetadata == nil {
 		p.logger.Warn("skipping cost calculation for log %s: object type is empty (timestamp: %s)", logEntry.ID, logEntry.Timestamp)
 		return nil, fmt.Errorf("%w: object type is empty for log %s", errPricingInputsUnavailable, logEntry.ID)
 	}
@@ -2076,8 +2086,8 @@ func (p *LoggerPlugin) calculateCostBreakdownForLog(logEntry *logstore.Log) (*sc
 		Provider:               schemas.ModelProvider(logEntry.Provider),
 		OriginalModelRequested: originalModelRequested,
 		ResolvedModelUsed:      logEntry.Model,
-		CacheDebug:             cacheDebug,
-		GuardrailDebug:         guardrailDebug,
+		CacheDebug:             cacheMetadata,
+		GuardrailDebug:         guardrailMetadata,
 		RoutingInfo: schemas.RoutingInfo{
 			Provider: schemas.ModelProvider(logEntry.Provider),
 			Model:    originalModelRequested,
@@ -2111,6 +2121,15 @@ func (p *LoggerPlugin) calculateCostBreakdownForLog(logEntry *logstore.Log) (*sc
 	}
 
 	resp := buildResponseForRequestType(requestType, usage, extraFields, servedTierFromLog(logEntry))
+
+	// Put the served model back on the response body, which the reconstructed
+	// response leaves empty. Pricing reads it in one place — the Azure Model Router
+	// split, which bills the router's own row plus the model it routed to — so
+	// without this a recalc drops the underlying model's leg. Every other row is
+	// priced off RoutingInfo and is unaffected.
+	if logEntry.ServedModel != nil {
+		setResponseModel(resp, *logEntry.ServedModel)
+	}
 
 	// Patch modality-specific output fields that are not captured in BifrostLLMUsage
 	// but are required for accurate cost calculation.
@@ -2191,6 +2210,24 @@ func servedTierFromLog(logEntry *logstore.Log) servedTier {
 		tier.serviceTier = &st
 	}
 	return tier
+}
+
+// setResponseModel writes model onto whichever response field the reconstructed
+// response carries, covering the types schemas.BifrostResponse.ServedModel reads.
+func setResponseModel(resp *schemas.BifrostResponse, model string) {
+	if resp == nil {
+		return
+	}
+	switch {
+	case resp.ChatResponse != nil:
+		resp.ChatResponse.Model = model
+	case resp.ResponsesResponse != nil:
+		resp.ResponsesResponse.Model = model
+	case resp.ResponsesStreamResponse != nil && resp.ResponsesStreamResponse.Response != nil:
+		resp.ResponsesStreamResponse.Response.Model = model
+	case resp.TextCompletionResponse != nil:
+		resp.TextCompletionResponse.Model = model
+	}
 }
 
 // buildResponseForRequestType wraps BifrostLLMUsage into the correct response

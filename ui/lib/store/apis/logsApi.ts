@@ -63,6 +63,12 @@ function buildFilterParams(filters: LogFilters): Record<string, string | number>
 	if (filters.stop_reasons && filters.stop_reasons.length > 0) {
 		params.stop_reasons = filters.stop_reasons.join(",");
 	}
+	if (filters.complexity_tiers && filters.complexity_tiers.length > 0) {
+		params.complexity_tiers = filters.complexity_tiers.join(",");
+	}
+	if (filters.complexity_mechanisms && filters.complexity_mechanisms.length > 0) {
+		params.complexity_mechanisms = filters.complexity_mechanisms.join(",");
+	}
 	if (filters.period) {
 		params.period = filters.period;
 	} else {
@@ -90,6 +96,9 @@ function buildFilterParams(filters: LogFilters): Record<string, string | number>
 	}
 	if (filters.business_unit_ids && filters.business_unit_ids.length > 0) {
 		params.business_unit_ids = filters.business_unit_ids.join(",");
+	}
+	if (filters.project_ids && filters.project_ids.length > 0) {
+		params.project_ids = filters.project_ids.join(",");
 	}
 	if (filters.apps && filters.apps.length > 0) {
 		params.apps = JSON.stringify(filters.apps);
@@ -392,6 +401,7 @@ export const logsApi = baseApi.injectEndpoints({
 				customers?: { id: string; name: string }[];
 				users?: { id: string; name: string }[];
 				business_units?: { id: string; name: string }[];
+				projects?: { id: string; name: string }[];
 				metadata_keys?: Record<string, string[]>;
 			},
 			{ dimensions?: string[]; q?: string } | void

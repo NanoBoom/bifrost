@@ -37,6 +37,7 @@ logs:
         description: Comma-separated list of virtual key IDs to filter by
         schema:
           type: string
+      - $ref: '#/_histogram-parameters/project_ids'
       - name: routing_rule_ids
         in: query
         description: Comma-separated list of routing rule IDs to filter by
@@ -45,6 +46,16 @@ logs:
       - name: routing_engine_used
         in: query
         description: Comma-separated list of routing engines to filter by (routing-rule, governance, or loadbalancing)
+        schema:
+          type: string
+      - name: complexity_tiers
+        in: query
+        description: Comma-separated list of routing complexity tiers to filter by (SIMPLE, MEDIUM, COMPLEX, or the legacy REASONING tier recorded on historical rows before it was merged into COMPLEX)
+        schema:
+          type: string
+      - name: complexity_mechanisms
+        in: query
+        description: Comma-separated list of complexity decision mechanisms to filter by (semantic, llm, session, or skipped)
         schema:
           type: string
       - name: start_time
@@ -209,6 +220,7 @@ logs-stats:
         description: Comma-separated list of virtual key IDs to filter by
         schema:
           type: string
+      - $ref: '#/_histogram-parameters/project_ids'
       - name: routing_rule_ids
         in: query
         description: Comma-separated list of routing rule IDs to filter by
@@ -217,6 +229,16 @@ logs-stats:
       - name: routing_engine_used
         in: query
         description: Comma-separated list of routing engines to filter by (routing-rule, governance, or loadbalancing)
+        schema:
+          type: string
+      - name: complexity_tiers
+        in: query
+        description: Comma-separated list of routing complexity tiers to filter by (SIMPLE, MEDIUM, COMPLEX, or the legacy REASONING tier recorded on historical rows before it was merged into COMPLEX)
+        schema:
+          type: string
+      - name: complexity_mechanisms
+        in: query
+        description: Comma-separated list of complexity decision mechanisms to filter by (semantic, llm, session, or skipped)
         schema:
           type: string
       - name: start_time
@@ -391,6 +413,7 @@ logs-histogram:
       - $ref: "#/_histogram-parameters/customer_ids"
       - $ref: "#/_histogram-parameters/user_ids"
       - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: '#/_histogram-parameters/project_ids'
       - $ref: "#/_histogram-parameters/routing_rule_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
@@ -437,6 +460,7 @@ logs-histogram-tokens:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
+      - $ref: '#/_histogram-parameters/project_ids'
       - $ref: "#/_histogram-parameters/routing_rule_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
@@ -478,6 +502,7 @@ logs-histogram-cost:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
+      - $ref: '#/_histogram-parameters/project_ids'
       - $ref: "#/_histogram-parameters/routing_rule_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
@@ -519,6 +544,7 @@ logs-histogram-models:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
+      - $ref: '#/_histogram-parameters/project_ids'
       - $ref: "#/_histogram-parameters/routing_rule_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
@@ -560,6 +586,7 @@ logs-histogram-latency:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
+      - $ref: '#/_histogram-parameters/project_ids'
       - $ref: "#/_histogram-parameters/routing_rule_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
@@ -601,6 +628,7 @@ logs-histogram-cost-by-provider:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
+      - $ref: '#/_histogram-parameters/project_ids'
       - $ref: "#/_histogram-parameters/routing_rule_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
@@ -642,6 +670,7 @@ logs-histogram-tokens-by-provider:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
+      - $ref: '#/_histogram-parameters/project_ids'
       - $ref: "#/_histogram-parameters/routing_rule_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
@@ -683,6 +712,7 @@ logs-histogram-latency-by-provider:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
+      - $ref: '#/_histogram-parameters/project_ids'
       - $ref: "#/_histogram-parameters/routing_rule_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
@@ -778,6 +808,12 @@ _histogram-parameters:
     description: Comma-separated list of business unit IDs to filter by
     schema:
       type: string
+  project_ids:
+    name: project_ids
+    in: query
+    description: Comma-separated list of project IDs to filter by
+    schema:
+      type: string
   routing_rule_ids:
     name: routing_rule_ids
     in: query
@@ -788,6 +824,18 @@ _histogram-parameters:
     name: routing_engine_used
     in: query
     description: Comma-separated list of routing engines to filter by
+    schema:
+      type: string
+  complexity_tiers:
+    name: complexity_tiers
+    in: query
+    description: Comma-separated list of routing complexity tiers to filter by (SIMPLE, MEDIUM, COMPLEX, or the legacy REASONING tier recorded on historical rows before it was merged into COMPLEX)
+    schema:
+      type: string
+  complexity_mechanisms:
+    name: complexity_mechanisms
+    in: query
+    description: Comma-separated list of complexity decision mechanisms to filter by (semantic, llm, session, or skipped)
     schema:
       type: string
   start_time:
@@ -1343,6 +1391,7 @@ logs-rankings:
       - $ref: "#/_histogram-parameters/customer_ids"
       - $ref: "#/_histogram-parameters/user_ids"
       - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: '#/_histogram-parameters/project_ids'
       - $ref: "#/_histogram-parameters/routing_rule_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
@@ -1408,6 +1457,7 @@ logs-dashboard:
       - $ref: "#/_histogram-parameters/customer_ids"
       - $ref: "#/_histogram-parameters/user_ids"
       - $ref: "#/_histogram-parameters/business_unit_ids"
+      - $ref: '#/_histogram-parameters/project_ids'
       - $ref: "#/_histogram-parameters/routing_rule_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
@@ -1458,8 +1508,9 @@ logs-histogram-cost-by-dimension:
     summary: Get cost histogram by dimension
     description: |
       Returns time-bucketed cost data grouped by an arbitrary dimension
-      (`provider`, `team_id`, `customer_id`, `user_id`, `business_unit_id`).
-      The dimension is supplied via the required `dimension` query parameter.
+      (`provider`, `team_id`, `customer_id`, `user_id`, `business_unit_id`,
+      `project_id`, `app`, `user_agent`). The dimension is supplied via the
+      required `dimension` query parameter.
     tags:
       - Logging
     parameters:
@@ -1475,6 +1526,7 @@ logs-histogram-cost-by-dimension:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
+      - $ref: '#/_histogram-parameters/project_ids'
       - $ref: "#/_histogram-parameters/routing_rule_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
@@ -1524,6 +1576,7 @@ logs-histogram-tokens-by-dimension:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
+      - $ref: '#/_histogram-parameters/project_ids'
       - $ref: "#/_histogram-parameters/routing_rule_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"
@@ -1573,6 +1626,7 @@ logs-histogram-latency-by-dimension:
       - $ref: "#/_histogram-parameters/objects"
       - $ref: "#/_histogram-parameters/selected_key_ids"
       - $ref: "#/_histogram-parameters/virtual_key_ids"
+      - $ref: '#/_histogram-parameters/project_ids'
       - $ref: "#/_histogram-parameters/routing_rule_ids"
       - $ref: "#/_histogram-parameters/routing_engine_used"
       - $ref: "#/_histogram-parameters/start_time"

@@ -311,6 +311,9 @@ false
 {{- if hasKey .Values.bifrost.client.compat "shouldConvertParams" }}
 {{- $_ := set $compat "should_convert_params" .Values.bifrost.client.compat.shouldConvertParams }}
 {{- end }}
+{{- if hasKey .Values.bifrost.client.compat "azureDeepseek" }}
+{{- $_ := set $compat "azure_deepseek" .Values.bifrost.client.compat.azureDeepseek }}
+{{- end }}
 {{- $_ := set $client "compat" $compat }}
 {{- end }}
 {{- if .Values.bifrost.client.prometheusLabels }}
@@ -600,6 +603,7 @@ false
 {{- if hasKey . "access_profile_id" }}{{- $_ := set $vk "access_profile_id" .access_profile_id }}{{- end }}
 {{- if .rate_limit_id }}{{- $_ := set $vk "rate_limit_id" .rate_limit_id }}{{- end }}
 {{- if hasKey . "calendar_aligned" }}{{- $_ := set $vk "calendar_aligned" .calendar_aligned }}{{- end }}
+{{- if hasKey . "allow_all_providers" }}{{- $_ := set $vk "allow_all_providers" .allow_all_providers }}{{- end }}
 {{- if .provider_configs }}{{- $_ := set $vk "provider_configs" .provider_configs }}{{- end }}
 {{- if .mcp_configs }}{{- $_ := set $vk "mcp_configs" .mcp_configs }}{{- end }}
 {{- $vks = append $vks $vk }}
@@ -1212,6 +1216,17 @@ false
 {{- $_ := set $pineconeConfig "index_host" .Values.vectorStore.pinecone.external.indexHost }}
 {{- end }}
 {{- $_ := set $vectorStore "config" $pineconeConfig }}
+{{- else if eq .Values.vectorStore.type "chromem" }}
+{{- $chromemConfig := dict }}
+{{- with .Values.vectorStore.chromem }}
+{{- if .path }}
+{{- $_ := set $chromemConfig "path" .path }}
+{{- end }}
+{{- if hasKey . "compress" }}
+{{- $_ := set $chromemConfig "compress" .compress }}
+{{- end }}
+{{- end }}
+{{- $_ := set $vectorStore "config" $chromemConfig }}
 {{- end }}
 {{- $_ := set $config "vector_store" $vectorStore }}
 {{- end }}
